@@ -33,7 +33,8 @@ axios.interceptors.response.use(
 );
 
 function Index() {
-  const [algorithm, setAlgorithm] = useState('lz77');
+  const [algorithm, setAlgorithm] = useState('zip');
+  const [decompressAlgorithm, setDecompressAlgorithm] = useState('zip'); // 解压缩算法
   const [files, setFiles] = useState([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [compressionProgress, setCompressionProgress] = useState(0);
@@ -314,6 +315,7 @@ function Index() {
           setUploadProgress(progress);
           if (progress === 100) {
             setCurrentStep(1);
+            message.success(`文件 ${file.name} 上传成功，开始压缩...`);
           }
         }
       };
@@ -321,6 +323,7 @@ function Index() {
       const response = await axios.post('http://localhost:8000/upload', formData, config);
       console.log('请求完成响应:', response.data);
       setCompressionTaskId(response.data.taskId);
+      message.info(`文件 ${file.name} 正在使用 ${algorithm === 'lz77' ? 'LZ77算法' : algorithm === 'huffman' ? '哈夫曼编码' : 'ZIP压缩'} 进行压缩...`);
     } catch (error) {
       console.error('请求失败:', error);
       message.error('请求失败：' + error.message);
@@ -362,12 +365,16 @@ function Index() {
   const handleDecompress = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('algorithm', algorithm);
+    // 使用文件自身的压缩算法进行解压
+    const fileAlgorithm = file.algorithm || algorithm;
+    formData.append('algorithm', fileAlgorithm);
 
     try {
+      message.loading(`正在解压文件 ${file.name}...`, 0);
       console.log('开始解压文件:', file.name);
       const response = await axios.post('http://localhost:8000/decompress', formData);
       console.log('解压完成响应:', response.data);
+      message.destroy();
 
       const decompressedFile = response.data.filename;
 
@@ -384,8 +391,46 @@ function Index() {
       link.click();
       link.remove();
 
-      message.success('文件解压成功！');
+      message.success(`文件 ${file.name} 解压成功！`);
     } catch (error) {
+      message.destroy();
+      console.error('解压失败:', error);
+      message.error('文件解压失败：' + error.message);
+    }
+  };
+
+  // 添加新的解压函数，使用用户选择的算法
+  const handleDecompressWithSelectedAlgorithm = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    // 使用用户选择的解压算法
+    formData.append('algorithm', decompressAlgorithm);
+
+    try {
+      message.loading(`正在使用${decompressAlgorithm === 'lz77' ? 'LZ77算法' : decompressAlgorithm === 'huffman' ? '哈夫曼编码' : 'ZIP压缩'}解压文件 ${file.name}...`, 0);
+      console.log('开始解压文件:', file.name);
+      const response = await axios.post('http://localhost:8000/decompress', formData);
+      console.log('解压完成响应:', response.data);
+      message.destroy();
+
+      const decompressedFile = response.data.filename;
+
+      // 下载解压后的文件
+      const downloadResponse = await axios.get(`http://localhost:8000/download/${decompressedFile}`, {
+        responseType: 'blob'
+      });
+
+      const url = window.URL.createObjectURL(new Blob([downloadResponse.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', decompressedFile);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      message.success(`文件 ${file.name} 解压成功！`);
+    } catch (error) {
+      message.destroy();
       console.error('解压失败:', error);
       message.error('文件解压失败：' + error.message);
     }
@@ -497,25 +542,30 @@ function Index() {
           )}
         </Header>
         <Content style={{ padding: '50px' }}>
-          <Card style={{ maxWidth: 1200, margin: '0 auto' }}>
-            <div style={{ marginBottom: 24 }}>
-              <Title level={4}>选择压缩算法：</Title>
-            <Radio.Group value={algorithm} onChange={e => setAlgorithm(e.target.value)}>
-                <Radio.Button value="zip">ZIP压缩</Radio.Button>
-                <Radio.Button value="huffman">哈夫曼编码</Radio.Button>
-                <Radio.Button value="lz77">LZ77算法</Radio.Button>                
+          <Card style={{ maxWidth: 1400, margin: '0 auto' }}>
+            <div style={{ marginBottom: 32 }}>
+              <Title level={4} style={{ marginBottom: 16 }}>选择压缩算法：</Title>
+              <Radio.Group value={algorithm} onChange={e => setAlgorithm(e.target.value)} size="large">
+                <Radio.Button value="zip" style={{  fontSize: '16px' }}>ZIP压缩</Radio.Button>
+                <Radio.Button value="huffman" style={{  fontSize: '16px' }}>哈夫曼编码</Radio.Button>
+                <Radio.Button value="lz77" style={{  fontSize: '16px' }}>LZ77算法</Radio.Button>                
               </Radio.Group>
+              <div style={{ marginTop: 8, color: '#666' }}>
+                {algorithm === 'lz77' ? 'LZ77算法：适用于文本和重复数据较多的文件，压缩率高' : 
+                 algorithm === 'huffman' ? '哈夫曼编码：适用于各种类型文件，压缩率适中' : 
+                 'ZIP压缩：通用压缩算法，兼容性好'}
+              </div>
             </div>
 
             <Divider>压缩文件</Divider>
 
-            <Steps current={currentStep} style={{ marginBottom: 24 }}>
+            <Steps current={currentStep} style={{ marginBottom: 32 }}>
               <Step title="上传文件" icon={<FileOutlined />} />
               <Step title="压缩中" icon={<CompressOutlined />} />
               <Step title="完成" icon={<CheckCircleOutlined />} />
             </Steps>
 
-            <div style={{ marginBottom: 24 }}>
+            <div style={{ marginBottom: 32 }}>
               <Title level={4}>上传文件：</Title>
               <Space>
                 <Upload
@@ -523,7 +573,7 @@ function Index() {
                     showUploadList={false}
                     maxCount={1}
                 >
-                  <Button icon={<UploadOutlined />}>选择文件</Button>
+                  <Button icon={<UploadOutlined />} size="large">选择文件</Button>
                 </Upload>
                 {isCompressing && (
                     <Button
@@ -532,6 +582,7 @@ function Index() {
                         icon={<StopOutlined />}
                         loading={isStopping}
                         disabled={isStopping}
+                        size="large"
                     >
                       停止压缩
                     </Button>
@@ -548,17 +599,19 @@ function Index() {
                             <p>正在使用 {algorithm === 'lz77' ? 'LZ77算法' : algorithm === 'huffman' ? '哈夫曼编码' : 'ZIP压缩'} 压缩文件</p>
                             <p>WebSocket连接状态: {ws && ws.readyState === WebSocket.OPEN ? '已连接' : '未连接'}</p>
                             <p>任务ID: {compressionTaskId}</p>
+                            <p>开始时间: {compressionStartTime ? new Date(compressionStartTime).toLocaleTimeString() : '未开始'}</p>
+                            <p>已用时间: {compressionDetails.timeElapsed ? compressionDetails.timeElapsed.toFixed(2) : '0.00'}秒</p>
                           </div>
                         }
                         type="info"
                         showIcon
                       />
                       <div>
-                        <div>上传进度：</div>
+                        <div style={{ marginBottom: 8 }}>上传进度：</div>
                         <Progress percent={uploadProgress} status="active" />
                       </div>
                       <div>
-                        <div>压缩进度：</div>
+                        <div style={{ marginBottom: 8 }}>压缩进度：</div>
                         <Progress
                             percent={compressionProgress}
                             status="active"
@@ -673,15 +726,28 @@ function Index() {
 
             {/* 文件列表 */}
             {files.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
+                <div style={{ marginBottom: 32 }}>
                   <Title level={4}>文件列表：</Title>
                   <Space direction="vertical" style={{ width: '100%' }}>
                     {files.map((file, index) => (
                         <Card key={index} size="small" style={{ marginBottom: 8 }}>
                           <div>
-                            <div><strong>文件名：</strong>{file.name}</div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                              <div><strong>文件名：</strong>{file.name}</div>
+                              <div style={{ 
+                                padding: '4px 8px', 
+                                borderRadius: '4px', 
+                                backgroundColor: file.algorithm === 'lz77' ? '#e6f7ff' : 
+                                                file.algorithm === 'huffman' ? '#f6ffed' : '#fff7e6',
+                                color: file.algorithm === 'lz77' ? '#1890ff' : 
+                                       file.algorithm === 'huffman' ? '#52c41a' : '#faad14',
+                                fontWeight: 'bold'
+                              }}>
+                                {file.algorithm === 'lz77' ? 'LZ77算法' : 
+                                 file.algorithm === 'huffman' ? '哈夫曼编码' : 'ZIP压缩'}
+                              </div>
+                            </div>
                             <div><strong>原始大小：</strong>{formatFileSize(file.size)}</div>
-                            <div><strong>压缩算法：</strong>{file.algorithm || '未压缩'}</div>
 
                             {file.compressed && file.compressionDetails && (
                                 <>
@@ -735,6 +801,13 @@ function Index() {
                                       >
                                         分享文件
                                       </Button>
+                                      <Button
+                                        type="default"
+                                        icon={<InboxOutlined />}
+                                        onClick={() => handleDecompress(file)}
+                                      >
+                                        解压文件
+                                      </Button>
                                     </Space>
                                   </div>
 
@@ -762,14 +835,25 @@ function Index() {
             )}
 
             <Divider>解压文件</Divider>
-            <div>
+            <div style={{ marginBottom: 32 }}>
               <Title level={4}>上传压缩文件进行解压：</Title>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 8 }}>选择解压算法：</div>
+                <Radio.Group value={decompressAlgorithm} onChange={e => setDecompressAlgorithm(e.target.value)}>
+                  <Radio.Button value="zip">ZIP压缩</Radio.Button>
+                  <Radio.Button value="huffman">哈夫曼编码</Radio.Button>
+                  <Radio.Button value="lz77">LZ77算法</Radio.Button>
+                </Radio.Group>
+                <div style={{ marginTop: 8, color: '#666' }}>
+                  注意：请选择与压缩时相同的算法进行解压，否则可能无法正确解压文件
+                </div>
+              </div>
               <Upload
-                  beforeUpload={handleDecompress}
+                  beforeUpload={handleDecompressWithSelectedAlgorithm}
                   showUploadList={false}
                   maxCount={1}
               >
-                <Button icon={<InboxOutlined />}>选择压缩文件</Button>
+                <Button icon={<InboxOutlined />} size="large">选择压缩文件</Button>
               </Upload>
             </div>
 
