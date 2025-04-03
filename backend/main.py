@@ -159,7 +159,7 @@ async def stop_compression(task_id: str):
     try:
         # 等待任务取消，设置超时
         try:
-            await asyncio.wait_for(compression_tasks[task_id], timeout=2.0)
+            await asyncio.wait_for(compression_tasks[task_id], timeout=1.0)
         except asyncio.TimeoutError:
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 停止任务超时: {task_id}")
             # 即使超时也继续执行清理操作

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Upload, Button, Radio, message, Card, Typography, Progress, Space, Divider, Steps, Modal, Input, Tooltip } from 'antd';
-import { UploadOutlined, DownloadOutlined, InboxOutlined, FileOutlined, CompressOutlined, CheckCircleOutlined, StopOutlined, ShareAltOutlined, CopyOutlined } from '@ant-design/icons';
+import { Layout, Upload, Button, Radio, message, Card, Typography, Progress, Space, Divider, Steps, Modal, Input, Tooltip, Spin, Alert } from 'antd';
+import { UploadOutlined, DownloadOutlined, InboxOutlined, FileOutlined, CompressOutlined, CheckCircleOutlined, StopOutlined, ShareAltOutlined, CopyOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { createRoot } from 'react-dom/client';
 import { Line, Pie, Column } from '@ant-design/charts';
@@ -11,25 +11,25 @@ const { Step } = Steps;
 
 // 配置axios拦截器
 axios.interceptors.request.use(
-  request => {
-    console.log('请求数据:', request);
-    return request;
-  },
-  error => {
-    console.error('请求错误:', error);
-    return Promise.reject(error);
-  }
+    request => {
+      console.log('请求数据:', request);
+      return request;
+    },
+    error => {
+      console.error('请求错误:', error);
+      return Promise.reject(error);
+    }
 );
 
 axios.interceptors.response.use(
-  response => {
-    console.log('响应数据:', response);
-    return response;
-  },
-  error => {
-    console.error('响应错误:', error);
-    return Promise.reject(error);
-  }
+    response => {
+      console.log('响应数据:', response);
+      return response;
+    },
+    error => {
+      console.error('响应错误:', error);
+      return Promise.reject(error);
+    }
 );
 
 function Index() {
@@ -200,6 +200,7 @@ function Index() {
             message.error('压缩过程出错：' + data.message);
             closeWebSocket();
           } else if (data.type === 'stopped') {
+            message.destroy(); // 清除所有loading消息
             setIsCompressing(false);
             setIsStopping(false);
             setCurrentStep(0);
@@ -260,7 +261,7 @@ function Index() {
 
     try {
       setIsStopping(true);
-      message.loading('正在停止压缩...');
+      const loadingMessage = message.loading('正在停止压缩...', 0);
       await axios.post(`http://localhost:8000/stop_compression/${compressionTaskId}`);
       // 不在这里关闭WebSocket，等待后端发送stopped消息
     } catch (error) {
@@ -300,7 +301,7 @@ function Index() {
         timeElapsed: 0
       });
 
-      // 重置图表数据
+      // 重置图表数据 - 只在开始新的压缩任务时重置
       setProgressData([]);
       setCompressionSpeedData([]);
       setCompressionStartTime(null);
@@ -447,25 +448,25 @@ function Index() {
   // 复制分享链接到剪贴板
   const copyShareLink = () => {
     navigator.clipboard.writeText(shareLink)
-      .then(() => {
-        message.success('分享链接已复制到剪贴板');
-      })
-      .catch(err => {
-        console.error('复制失败:', err);
-        message.error('复制失败，请手动复制');
-      });
+        .then(() => {
+          message.success('分享链接已复制到剪贴板');
+        })
+        .catch(err => {
+          console.error('复制失败:', err);
+          message.error('复制失败，请手动复制');
+        });
   };
 
   // 复制密码到剪贴板
   const copyPassword = () => {
     navigator.clipboard.writeText(sharePassword)
-      .then(() => {
-        message.success('密码已复制到剪贴板');
-      })
-      .catch(err => {
-        console.error('复制失败:', err);
-        message.error('复制失败，请手动复制');
-      });
+        .then(() => {
+          message.success('密码已复制到剪贴板');
+        })
+        .catch(err => {
+          console.error('复制失败:', err);
+          message.error('复制失败，请手动复制');
+        });
   };
 
   // 组件卸载时关闭WebSocket连接
@@ -476,360 +477,424 @@ function Index() {
   }, []);
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ background: '#fff', padding: '0 50px' }}>
-        <Title level={3} style={{ margin: '16px 0' }}>文件压缩分享系统</Title>
-      </Header>
-      <Content style={{ padding: '50px' }}>
-        <Card style={{ maxWidth: 800, margin: '0 auto' }}>
-          <div style={{ marginBottom: 24 }}>
-            <Title level={4}>选择压缩算法：</Title>
-            <Radio.Group value={algorithm} onChange={e => setAlgorithm(e.target.value)}>
-              <Radio.Button value="lz77">LZ77算法</Radio.Button>
-              <Radio.Button value="huffman">哈夫曼编码</Radio.Button>
-              <Radio.Button value="zip">ZIP压缩</Radio.Button>
-            </Radio.Group>
-          </div>
-
-          <Divider>压缩文件</Divider>
-
-          <Steps current={currentStep} style={{ marginBottom: 24 }}>
-            <Step title="上传文件" icon={<FileOutlined />} />
-            <Step title="压缩中" icon={<CompressOutlined />} />
-            <Step title="完成" icon={<CheckCircleOutlined />} />
-          </Steps>
-
-          <div style={{ marginBottom: 24 }}>
-            <Title level={4}>上传文件：</Title>
-            <Space>
-              <Upload
-                beforeUpload={handleUpload}
-                showUploadList={false}
-                maxCount={1}
-              >
-                <Button icon={<UploadOutlined />}>选择文件</Button>
-              </Upload>
-              {isCompressing && (
-                <Button
-                  danger
-                  onClick={handleStopCompression}
-                  icon={<StopOutlined />}
-                  loading={isStopping}
-                  disabled={isStopping}
-                >
-                  停止压缩
-                </Button>
-              )}
-            </Space>
-
-            {isCompressing && (
-              <div style={{ marginTop: 16 }}>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <div>
-                    <div>上传进度：</div>
-                    <Progress percent={uploadProgress} status="active" />
-                  </div>
-                  <div>
-                    <div>压缩进度：</div>
-                    <Progress
-                      percent={compressionProgress}
-                      status="active"
-                      format={percent => `${percent}%`}
-                    />
-                  </div>
-
-                  {/* 压缩过程中的实时图表 */}
-                  {compressionProgress > 0 && (
-                    <div style={{ marginTop: 16 }}>
-                      <Title level={5}>实时压缩分析</Title>
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        {/* 压缩进度时间线 */}
-                        {progressData.length > 0 && (
-                          <Card title="压缩进度时间线" size="small">
-                            <Line
-                              data={progressData}
-                              xField="time"
-                              yField="progress"
-                              xAxis={{
-                                title: { text: '时间 (秒)' },
-                                // 限制横坐标范围，只显示最近的数据
-                                min: progressData.length > 0 ? Math.max(0, parseFloat(progressData[progressData.length - 1].time) - 30) : 0,
-                                max: progressData.length > 0 ? parseFloat(progressData[progressData.length - 1].time) : 0,
-                              }}
-                              yAxis={{
-                                title: { text: '进度 (%)' },
-                                min: 0,
-                                max: 100,
-                              }}
-                              point={{
-                                size: 2,
-                                shape: 'circle',
-                              }}
-                              tooltip={{
-                                formatter: (datum) => {
-                                  return { name: '进度', value: datum.progress + '%' };
-                                },
-                              }}
-                              height={200}
-                            />
-                          </Card>
-                        )}
-
-                        {/* 压缩速度折线图 */}
-                        {compressionSpeedData.length > 0 && (
-                          <Card title="压缩速度变化" size="small">
-                            <Line
-                              data={compressionSpeedData}
-                              xField="time"
-                              yField="speed"
-                              xAxis={{
-                                title: { text: '时间 (秒)' },
-                                // 限制横坐标范围，只显示最近的数据
-                                min: compressionSpeedData.length > 0 ? Math.max(0, parseFloat(compressionSpeedData[compressionSpeedData.length - 1].time) - 30) : 0,
-                                max: compressionSpeedData.length > 0 ? parseFloat(compressionSpeedData[compressionSpeedData.length - 1].time) : 0,
-                              }}
-                              yAxis={{
-                                title: { text: '速度 (字节/秒)' },
-                              }}
-                              point={{
-                                size: 2,
-                                shape: 'circle',
-                              }}
-                              tooltip={{
-                                formatter: (datum) => {
-                                  return { name: '速度', value: formatFileSize(datum.speed) + '/秒' };
-                                },
-                              }}
-                              height={200}
-                            />
-                          </Card>
-                        )}
-                      </Space>
-                    </div>
-                  )}
-                </Space>
-              </div>
-            )}
-          </div>
-
-          {/* 文件列表 */}
-          {files.length > 0 && (
+      <Layout style={{ minHeight: '100vh' }}>
+        <Header style={{ background: '#fff', padding: '0 50px' }}>
+          <Title level={3} style={{ margin: '16px 0' }}>压缩文件安全共享系统</Title>
+          {isWsConnecting && (
+            <div style={{ color: '#1890ff', marginBottom: '8px' }}>
+              <Spin size="small" /> 正在连接服务器...
+            </div>
+          )}
+          {ws && ws.readyState === WebSocket.OPEN && (
+            <div style={{ color: '#52c41a', marginBottom: '8px' }}>
+              <CheckCircleOutlined /> 已连接到服务器
+            </div>
+          )}
+          {ws && ws.readyState === WebSocket.CLOSED && (
+            <div style={{ color: '#ff4d4f', marginBottom: '8px' }}>
+              <CloseCircleOutlined /> 服务器连接已断开
+            </div>
+          )}
+        </Header>
+        <Content style={{ padding: '50px' }}>
+          <Card style={{ maxWidth: 1200, margin: '0 auto' }}>
             <div style={{ marginBottom: 24 }}>
-              <Title level={4}>文件列表：</Title>
-              <Space direction="vertical" style={{ width: '100%' }}>
-                {files.map((file, index) => (
-                  <Card key={index} size="small" style={{ marginBottom: 8 }}>
-                    <div>
-                      <div><strong>文件名：</strong>{file.name}</div>
-                      <div><strong>原始大小：</strong>{formatFileSize(file.size)}</div>
-                      <div><strong>压缩算法：</strong>{file.algorithm || '未压缩'}</div>
+              <Title level={4}>选择压缩算法：</Title>
+            <Radio.Group value={algorithm} onChange={e => setAlgorithm(e.target.value)}>
+                <Radio.Button value="zip">ZIP压缩</Radio.Button>
+                <Radio.Button value="huffman">哈夫曼编码</Radio.Button>
+                <Radio.Button value="lz77">LZ77算法</Radio.Button>                
+              </Radio.Group>
+            </div>
 
-                      {file.compressed && file.compressionDetails && (
-                        <>
-                          <div><strong>压缩后大小：</strong>{formatFileSize(file.compressionDetails.compressedSize)}</div>
-                          <div><strong>压缩率：</strong>{file.compressionDetails.compressionRatio ? file.compressionDetails.compressionRatio.toFixed(2) : '0.00'}%</div>
-                          <div><strong>耗时：</strong>{file.compressionDetails.timeElapsed ? file.compressionDetails.timeElapsed.toFixed(2) : '0.00'}秒</div>
+            <Divider>压缩文件</Divider>
 
-                          {/* 压缩效果图表 */}
-                          <div style={{ marginTop: 16 }}>
-                            <Title level={5}>压缩效果分析</Title>
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                              {/* 压缩前后大小对比饼图 */}
-                              <Card title="压缩前后大小对比" size="small">
-                                <Pie
-                                  data={[
-                                    { type: '原始大小', value: file.compressionDetails.originalSize },
-                                    { type: '压缩后大小', value: file.compressionDetails.compressedSize }
-                                  ]}
-                                  angleField="value"
-                                  colorField="type"
-                                  radius={0.8}
-                                  label={{
-                                    type: 'outer',
-                                    content: '{name} {percentage}',
+            <Steps current={currentStep} style={{ marginBottom: 24 }}>
+              <Step title="上传文件" icon={<FileOutlined />} />
+              <Step title="压缩中" icon={<CompressOutlined />} />
+              <Step title="完成" icon={<CheckCircleOutlined />} />
+            </Steps>
+
+            <div style={{ marginBottom: 24 }}>
+              <Title level={4}>上传文件：</Title>
+              <Space>
+                <Upload
+                    beforeUpload={handleUpload}
+                    showUploadList={false}
+                    maxCount={1}
+                >
+                  <Button icon={<UploadOutlined />}>选择文件</Button>
+                </Upload>
+                {isCompressing && (
+                    <Button
+                        danger
+                        onClick={handleStopCompression}
+                        icon={<StopOutlined />}
+                        loading={isStopping}
+                        disabled={isStopping}
+                    >
+                      停止压缩
+                    </Button>
+                )}
+              </Space>
+
+              {isCompressing && (
+                  <div style={{ marginTop: 16 }}>
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <Alert
+                        message="压缩进行中"
+                        description={
+                          <div>
+                            <p>正在使用 {algorithm === 'lz77' ? 'LZ77算法' : algorithm === 'huffman' ? '哈夫曼编码' : 'ZIP压缩'} 压缩文件</p>
+                            <p>WebSocket连接状态: {ws && ws.readyState === WebSocket.OPEN ? '已连接' : '未连接'}</p>
+                            <p>任务ID: {compressionTaskId}</p>
+                          </div>
+                        }
+                        type="info"
+                        showIcon
+                      />
+                      <div>
+                        <div>上传进度：</div>
+                        <Progress percent={uploadProgress} status="active" />
+                      </div>
+                      <div>
+                        <div>压缩进度：</div>
+                        <Progress
+                            percent={compressionProgress}
+                            status="active"
+                            format={percent => `${percent}%`}
+                        />
+                      </div>
+                      
+                      {/* 压缩过程中的实时图表 */}
+                      {(compressionProgress > 0 || (!isCompressing && progressData.length > 0)) && (
+                        <div style={{ marginTop: 16 }}>
+                          <Title level={5}>实时压缩分析</Title>
+                          
+                          {/* 动态数字展示 */}
+                          <Card size="small" style={{ marginBottom: 16 }}>
+                            <Space size="large" style={{ width: '100%', justifyContent: 'space-around' }}>
+                              <div>
+                                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>原始大小</div>
+                                <div style={{ fontSize: '20px', color: '#1890ff' }}>
+                                  {formatFileSize(compressionDetails.originalSize)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>当前大小</div>
+                                <div style={{ fontSize: '20px', color: '#52c41a' }}>
+                                  {formatFileSize(compressionDetails.compressedSize)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>压缩率</div>
+                                <div style={{ fontSize: '20px', color: '#faad14' }}>
+                                  {compressionDetails.compressionRatio ? compressionDetails.compressionRatio.toFixed(2) : '0.00'}%
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>已用时间</div>
+                                <div style={{ fontSize: '20px', color: '#722ed1' }}>
+                                  {compressionDetails.timeElapsed ? compressionDetails.timeElapsed.toFixed(2) : '0.00'}秒
+                                </div>
+                              </div>
+                            </Space>
+                          </Card>
+                          
+                          <Space direction="vertical" style={{ width: '100%' }}>
+                            {/* 压缩进度时间线 */}
+                            {progressData.length > 0 && (
+                              <Card title="压缩进度时间线" size="small">
+                                <Line
+                                  data={progressData}
+                                  xField="time"
+                                  yField="progress"
+                                  xAxis={{
+                                    title: { text: '时间 (秒)' },
+                                    // 限制横坐标范围，只显示最近的数据
+                                    min: progressData.length > 0 ? Math.max(0, parseFloat(progressData[progressData.length - 1].time) - 30) : 0,
+                                    max: progressData.length > 0 ? parseFloat(progressData[progressData.length - 1].time) : 0,
                                   }}
-                                  interactions={[
-                                    {
-                                      type: 'element-active',
+                                  yAxis={{
+                                    title: { text: '进度 (%)' },
+                                    min: 0,
+                                    max: 100,
+                                  }}
+                                  point={{
+                                    size: 2,
+                                    shape: 'circle',
+                                  }}
+                                  tooltip={{
+                                    formatter: (datum) => {
+                                      return { name: '进度', value: datum.progress + '%' };
                                     },
-                                  ]}
+                                  }}
                                   height={200}
                                 />
                               </Card>
-
-                              {/* 压缩进度时间线 */}
-                              {progressData.length > 0 && (
-                                <Card title="压缩进度时间线" size="small">
-                                  <Line
-                                    data={progressData}
-                                    xField="time"
-                                    yField="progress"
-                                    xAxis={{
-                                      title: { text: '时间 (秒)' },
-                                      // 限制横坐标范围，只显示最近的数据
-                                      min: progressData.length > 0 ? Math.max(0, parseFloat(progressData[progressData.length - 1].time) - 30) : 0,
-                                      max: progressData.length > 0 ? parseFloat(progressData[progressData.length - 1].time) : 0,
-                                    }}
-                                    yAxis={{
-                                      title: { text: '进度 (%)' },
-                                      min: 0,
-                                      max: 100,
-                                    }}
-                                    point={{
-                                      size: 2,
-                                      shape: 'circle',
-                                    }}
-                                    tooltip={{
-                                      formatter: (datum) => {
-                                        return { name: '进度', value: datum.progress + '%' };
-                                      },
-                                    }}
-                                    height={200}
-                                  />
-                                </Card>
-                              )}
-
-                              {/* 压缩速度折线图 */}
-                              {compressionSpeedData.length > 0 && (
-                                <Card title="压缩速度变化" size="small">
-                                  <Line
-                                    data={compressionSpeedData}
-                                    xField="time"
-                                    yField="speed"
-                                    xAxis={{
-                                      title: { text: '时间 (秒)' },
-                                      // 限制横坐标范围，只显示最近的数据
-                                      min: compressionSpeedData.length > 0 ? Math.max(0, parseFloat(compressionSpeedData[compressionSpeedData.length - 1].time) - 30) : 0,
-                                      max: compressionSpeedData.length > 0 ? parseFloat(compressionSpeedData[compressionSpeedData.length - 1].time) : 0,
-                                    }}
-                                    yAxis={{
-                                      title: { text: '速度 (字节/秒)' },
-                                    }}
-                                    point={{
-                                      size: 2,
-                                      shape: 'circle',
-                                    }}
-                                    tooltip={{
-                                      formatter: (datum) => {
-                                        return { name: '速度', value: formatFileSize(datum.speed) + '/秒' };
-                                      },
-                                    }}
-                                    height={200}
-                                  />
-                                </Card>
-                              )}
-                            </Space>
-                          </div>
-
-                          <div style={{ marginTop: 8 }}>
-                            <Space>
-                              <Button
-                                type="primary"
-                                icon={<DownloadOutlined />}
-                                onClick={() => handleDownload(file.compressedName)}
-                              >
-                                下载压缩文件
-                              </Button>
-                              <Button
-                                icon={<ShareAltOutlined />}
-                                onClick={() => handleShare(file)}
-                              >
-                                分享文件
-                              </Button>
-                            </Space>
-                          </div>
-
-                          {file.shareInfo && (
-                            <div style={{ marginTop: 8, padding: 8, background: '#f5f5f5', borderRadius: 4 }}>
-                              <div><strong>分享链接：</strong>
-                                <Tooltip title="点击复制">
-                                  <a onClick={copyShareLink}>{file.shareInfo.link}</a>
-                                </Tooltip>
-                              </div>
-                              <div><strong>分享密码：</strong>
-                                <Tooltip title="点击复制">
-                                  <a onClick={copyPassword}>{file.shareInfo.password}</a>
-                                </Tooltip>
-                              </div>
-                            </div>
-                          )}
-                        </>
+                            )}
+                            
+                            {/* 压缩速度折线图 */}
+                            {compressionSpeedData.length > 0 && (
+                              <Card title="压缩速度变化" size="small">
+                                <Line
+                                  data={compressionSpeedData}
+                                  xField="time"
+                                  yField="speed"
+                                  xAxis={{
+                                    title: { text: '时间 (秒)' },
+                                    // 限制横坐标范围，只显示最近的数据
+                                    min: compressionSpeedData.length > 0 ? Math.max(0, parseFloat(compressionSpeedData[compressionSpeedData.length - 1].time) - 30) : 0,
+                                    max: compressionSpeedData.length > 0 ? parseFloat(compressionSpeedData[compressionSpeedData.length - 1].time) : 0,
+                                  }}
+                                  yAxis={{
+                                    title: { text: '速度 (字节/秒)' },
+                                  }}
+                                  point={{
+                                    size: 2,
+                                    shape: 'circle',
+                                  }}
+                                  tooltip={{
+                                    formatter: (datum) => {
+                                      return { name: '速度', value: formatFileSize(datum.speed) + '/秒' };
+                                    },
+                                  }}
+                                  height={200}
+                                />
+                              </Card>
+                            )}
+                          </Space>
+                        </div>
                       )}
-                    </div>
+                    </Space>
+                  </div>
+              )}
+            </div>
+
+            {/* 文件列表 */}
+            {files.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <Title level={4}>文件列表：</Title>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {files.map((file, index) => (
+                        <Card key={index} size="small" style={{ marginBottom: 8 }}>
+                          <div>
+                            <div><strong>文件名：</strong>{file.name}</div>
+                            <div><strong>原始大小：</strong>{formatFileSize(file.size)}</div>
+                            <div><strong>压缩算法：</strong>{file.algorithm || '未压缩'}</div>
+
+                            {file.compressed && file.compressionDetails && (
+                                <>
+                                  <div><strong>原始大小：</strong>{formatFileSize(file.compressionDetails.originalSize)}</div>
+                                  <div><strong>压缩后大小：</strong>{formatFileSize(file.compressionDetails.compressedSize)}</div>
+                                  <div><strong>压缩率：</strong>{file.compressionDetails.compressionRatio ? file.compressionDetails.compressionRatio.toFixed(2) : '0.00'}%</div>
+                                  <div><strong>耗时：</strong>{file.compressionDetails.timeElapsed ? file.compressionDetails.timeElapsed.toFixed(2) : '0.00'}秒</div>
+                                  
+                                  {/* 压缩结果数字展示 */}
+                                  <Card size="small" style={{ marginTop: 8, marginBottom: 8 }}>
+                                    <Space size="large" style={{ width: '100%', justifyContent: 'space-around' }}>
+                                      <div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>原始大小</div>
+                                        <div style={{ fontSize: '20px', color: '#1890ff' }}>
+                                          {formatFileSize(file.compressionDetails.originalSize)}
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>压缩后大小</div>
+                                        <div style={{ fontSize: '20px', color: '#52c41a' }}>
+                                          {formatFileSize(file.compressionDetails.compressedSize)}
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>压缩率</div>
+                                        <div style={{ fontSize: '20px', color: '#faad14' }}>
+                                          {file.compressionDetails.compressionRatio ? file.compressionDetails.compressionRatio.toFixed(2) : '0.00'}%
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>总耗时</div>
+                                        <div style={{ fontSize: '20px', color: '#722ed1' }}>
+                                          {file.compressionDetails.timeElapsed ? file.compressionDetails.timeElapsed.toFixed(2) : '0.00'}秒
+                                        </div>
+                                      </div>
+                                    </Space>
+                                  </Card>
+                                  
+                                  <div style={{ marginTop: 8 }}>
+                                    <Space>
+                                      <Button 
+                                        type="primary" 
+                                        icon={<DownloadOutlined />} 
+                                        onClick={() => handleDownload(file.compressedName)}
+                                      >
+                                        下载压缩文件
+                                      </Button>
+                                      <Button
+                                        icon={<ShareAltOutlined />}
+                                        onClick={() => handleShare(file)}
+                                      >
+                                        分享文件
+                                      </Button>
+                                    </Space>
+                                  </div>
+
+                                  {file.shareInfo && (
+                                      <div style={{ marginTop: 8, padding: 8, background: '#f5f5f5', borderRadius: 4 }}>
+                                        <div><strong>分享链接：</strong>
+                                          <Tooltip title="点击复制">
+                                            <a onClick={copyShareLink}>{file.shareInfo.link}</a>
+                                          </Tooltip>
+                                        </div>
+                                        <div><strong>分享密码：</strong>
+                                          <Tooltip title="点击复制">
+                                            <a onClick={copyPassword}>{file.shareInfo.password}</a>
+                                          </Tooltip>
+                                        </div>
+                                      </div>
+                                  )}
+                                </>
+                            )}
+                          </div>
+                        </Card>
+                    ))}
+                  </Space>
+                </div>
+            )}
+
+            <Divider>解压文件</Divider>
+            <div>
+              <Title level={4}>上传压缩文件进行解压：</Title>
+              <Upload
+                  beforeUpload={handleDecompress}
+                  showUploadList={false}
+                  maxCount={1}
+              >
+                <Button icon={<InboxOutlined />}>选择压缩文件</Button>
+              </Upload>
+            </div>
+
+            {/* 压缩效果图表 - 放在页面最下面 */}
+            <Divider>压缩效果分析</Divider>
+            <div style={{ marginTop: 16 }}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {/* 压缩进度时间线 */}
+                {!isCompressing && progressData.length > 0 && (
+                  <Card title="压缩进度时间线" size="small">
+                    <Line
+                      data={progressData}
+                      xField="time"
+                      yField="progress"
+                      xAxis={{
+                        title: { text: '时间 (秒)' },
+                        min: 0,
+                        max: 100,
+                      }}
+                      yAxis={{
+                        title: { text: '进度 (%)' },
+                        min: 0,
+                        max: 100,
+                      }}
+                      point={{
+                        size: 2,
+                        shape: 'circle',
+                      }}
+                      tooltip={{
+                        formatter: (datum) => {
+                          return { name: '进度', value: datum.progress + '%' };
+                        },
+                      }}
+                      height={200}
+                    />
                   </Card>
-                ))}
+                )}
+                
+                {/* 压缩速度折线图 */}
+                {!isCompressing && compressionSpeedData.length > 0 && (
+                  <Card title="压缩速度变化" size="small">
+                    <Line
+                      data={compressionSpeedData}
+                      xField="time"
+                      yField="speed"
+                      xAxis={{
+                        title: { text: '时间 (秒)' },
+                        min: 0,
+                        max: 100
+                      }}
+                      yAxis={{
+                        title: { text: '速度 (字节/秒)' },
+                      }}
+                      point={{
+                        size: 2,
+                        shape: 'circle',
+                      }}
+                      tooltip={{
+                        formatter: (datum) => {
+                          return { name: '速度', value: formatFileSize(datum.speed) + '/秒' };
+                        },
+                      }}
+                      height={200}
+                    />
+                  </Card>
+                )}
               </Space>
             </div>
+          </Card>
+        </Content>
+
+        {/* 分享对话框 */}
+        <Modal
+            title="分享文件"
+            open={shareModalVisible}
+            onCancel={() => setShareModalVisible(false)}
+            footer={[
+              <Button key="close" onClick={() => setShareModalVisible(false)}>
+                关闭
+              </Button>
+            ]}
+        >
+          {isSharing ? (
+              <div style={{ textAlign: 'center', padding: '20px' }}>
+                <Progress type="circle" percent={100} status="active" />
+                <div style={{ marginTop: 16 }}>正在生成分享链接...</div>
+              </div>
+          ) : shareInfo ? (
+              <div>
+                <p>文件已成功分享！请将以下链接和密码发送给需要下载的人：</p>
+                <div style={{ marginBottom: 16 }}>
+                  <div><strong>分享链接：</strong></div>
+                  <Input.Group compact>
+                    <Input
+                        style={{ width: 'calc(100% - 32px)' }}
+                        value={shareLink}
+                        readOnly
+                    />
+                    <Tooltip title="复制链接">
+                      <Button icon={<CopyOutlined />} onClick={copyShareLink} />
+                    </Tooltip>
+                  </Input.Group>
+                </div>
+                <div>
+                  <div><strong>分享密码：</strong></div>
+                  <Input.Group compact>
+                    <Input
+                        style={{ width: 'calc(100% - 32px)' }}
+                        value={sharePassword}
+                        readOnly
+                    />
+                    <Tooltip title="复制密码">
+                      <Button icon={<CopyOutlined />} onClick={copyPassword} />
+                    </Tooltip>
+                  </Input.Group>
+                </div>
+                <div style={{ marginTop: 16, color: '#ff4d4f' }}>
+                  <p>注意：密码仅显示一次，请妥善保存！</p>
+                </div>
+              </div>
+          ) : (
+              <div>加载中...</div>
           )}
-
-          <Divider>解压文件</Divider>
-          <div>
-            <Title level={4}>上传压缩文件进行解压：</Title>
-            <Upload
-              beforeUpload={handleDecompress}
-              showUploadList={false}
-              maxCount={1}
-            >
-              <Button icon={<InboxOutlined />}>选择压缩文件</Button>
-            </Upload>
-          </div>
-        </Card>
-      </Content>
-
-      {/* 分享对话框 */}
-      <Modal
-        title="分享文件"
-        open={shareModalVisible}
-        onCancel={() => setShareModalVisible(false)}
-        footer={[
-          <Button key="close" onClick={() => setShareModalVisible(false)}>
-            关闭
-          </Button>
-        ]}
-      >
-        {isSharing ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Progress type="circle" percent={100} status="active" />
-            <div style={{ marginTop: 16 }}>正在生成分享链接...</div>
-          </div>
-        ) : shareInfo ? (
-          <div>
-            <p>文件已成功分享！请将以下链接和密码发送给需要下载的人：</p>
-            <div style={{ marginBottom: 16 }}>
-              <div><strong>分享链接：</strong></div>
-              <Input.Group compact>
-                <Input
-                  style={{ width: 'calc(100% - 32px)' }}
-                  value={shareLink}
-                  readOnly
-                />
-                <Tooltip title="复制链接">
-                  <Button icon={<CopyOutlined />} onClick={copyShareLink} />
-                </Tooltip>
-              </Input.Group>
-            </div>
-            <div>
-              <div><strong>分享密码：</strong></div>
-              <Input.Group compact>
-                <Input
-                  style={{ width: 'calc(100% - 32px)' }}
-                  value={sharePassword}
-                  readOnly
-                />
-                <Tooltip title="复制密码">
-                  <Button icon={<CopyOutlined />} onClick={copyPassword} />
-                </Tooltip>
-              </Input.Group>
-            </div>
-            <div style={{ marginTop: 16, color: '#ff4d4f' }}>
-              <p>注意：密码仅显示一次，请妥善保存！</p>
-            </div>
-          </div>
-        ) : (
-          <div>加载中...</div>
-        )}
-      </Modal>
-    </Layout>
+        </Modal>
+      </Layout>
   );
 }
 
@@ -838,7 +903,7 @@ export default Index;
 const container = document.getElementById('root');
 const root = createRoot(container);
 root.render(
-  <React.StrictMode>
-    <Index />
-  </React.StrictMode>
+    <React.StrictMode>
+      <Index />
+    </React.StrictMode>
 );
