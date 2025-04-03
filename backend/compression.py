@@ -4,6 +4,12 @@ import struct
 import time
 import os
 import zipfile
+#import py7zr
+import rarfile
+import tempfile
+import shutil
+import asyncio
+import subprocess
 
 
 class LZ77Compressor:
@@ -337,4 +343,63 @@ class ZipCompressor:
 
     def decompress(self, input_path, output_path):
         with zipfile.ZipFile(input_path, 'r') as zipf:
-            zipf.extractall(os.path.dirname(output_path)) 
+            zipf.extractall(os.path.dirname(output_path))
+
+
+class SevenZipCompressor:
+    def __init__(self):
+        self.progress_callback = None
+        self.start_time = 0
+        self.original_size = 0
+
+    def set_progress_callback(self, callback):
+        self.progress_callback = callback
+
+    async def compress(self, input_path, output_path):
+        self.start_time = time.time()
+        self.original_size = os.path.getsize(input_path)
+        
+        # 创建临时目录
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # 使用py7zr创建7z文件
+            with py7zr.SevenZipFile(output_path, 'w', filters=[{'id': py7zr.FILTER_LZMA2, 'preset': 7}]) as sz:
+                # 添加文件到7z
+                sz.write(input_path, os.path.basename(input_path))
+                
+                # 模拟进度更新
+                for i in range(101):
+                    if self.progress_callback:
+                        current_size = os.path.getsize(output_path)
+                        compression_ratio = (1 - current_size / self.original_size) * 100
+                        time_elapsed = time.time() - self.start_time
+                        
+                        await self.progress_callback({
+                            'type': 'progress',
+                            'progress': i,
+                            'originalSize': self.original_size,
+                            'compressedSize': current_size,
+                            'compressionRatio': compression_ratio,
+                            'timeElapsed': time_elapsed
+                        })
+        finally:
+            # 清理临时目录
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+        if self.progress_callback:
+            final_size = os.path.getsize(output_path)
+            compression_ratio = (1 - final_size / self.original_size) * 100
+            time_elapsed = time.time() - self.start_time
+            
+            await self.progress_callback({
+                'type': 'complete',
+                'filename': os.path.basename(output_path),
+                'originalSize': self.original_size,
+                'compressedSize': final_size,
+                'compressionRatio': compression_ratio,
+                'timeElapsed': time_elapsed
+            })
+            
+    def decompress(self, input_path, output_path):
+        with py7zr.SevenZipFile(input_path, 'r') as sz:
+            sz.extractall(os.path.dirname(output_path)) 
