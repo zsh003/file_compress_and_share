@@ -371,7 +371,21 @@ function Index() {
 
     try {
       message.loading(`正在解压文件 ${file.name}...`, 0);
-      console.log('开始解压文件:', file.name);
+      console.log('开始解压文件:', file.name, '使用算法:', fileAlgorithm);
+      
+      // 确保文件是File对象
+      if (!(file instanceof File)) {
+        // 如果不是File对象，需要先下载文件
+        const downloadResponse = await axios.get(`http://localhost:8000/download/${file.compressedName}`, {
+          responseType: 'blob'
+        });
+        
+        // 创建File对象
+        const fileBlob = new Blob([downloadResponse.data]);
+        const decompressFile = new File([fileBlob], file.compressedName, { type: 'application/octet-stream' });
+        formData.set('file', decompressFile);
+      }
+      
       const response = await axios.post('http://localhost:8000/decompress', formData);
       console.log('解压完成响应:', response.data);
       message.destroy();
@@ -379,23 +393,29 @@ function Index() {
       const decompressedFile = response.data.filename;
 
       // 下载解压后的文件
-      const downloadResponse = await axios.get(`http://localhost:8000/download/${decompressedFile}`, {
-        responseType: 'blob'
-      });
+      try {
+        const downloadResponse = await axios.get(`http://localhost:8000/download/${decompressedFile}`, {
+          responseType: 'blob'
+        });
 
-      const url = window.URL.createObjectURL(new Blob([downloadResponse.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', decompressedFile);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+        const url = window.URL.createObjectURL(new Blob([downloadResponse.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', decompressedFile);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
 
-      message.success(`文件 ${file.name} 解压成功！`);
+        message.success(`文件 ${file.name} 解压成功！`);
+      } catch (downloadError) {
+        console.error('下载解压文件失败:', downloadError);
+        message.error('下载解压文件失败：' + downloadError.message);
+      }
     } catch (error) {
       message.destroy();
       console.error('解压失败:', error);
-      message.error('文件解压失败：' + error.message);
+      message.error('文件解压失败：' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -408,7 +428,8 @@ function Index() {
 
     try {
       message.loading(`正在使用${decompressAlgorithm === 'lz77' ? 'LZ77算法' : decompressAlgorithm === 'huffman' ? '哈夫曼编码' : 'ZIP压缩'}解压文件 ${file.name}...`, 0);
-      console.log('开始解压文件:', file.name);
+      console.log('开始解压文件:', file.name, '使用算法:', decompressAlgorithm);
+      
       const response = await axios.post('http://localhost:8000/decompress', formData);
       console.log('解压完成响应:', response.data);
       message.destroy();
@@ -416,23 +437,29 @@ function Index() {
       const decompressedFile = response.data.filename;
 
       // 下载解压后的文件
-      const downloadResponse = await axios.get(`http://localhost:8000/download/${decompressedFile}`, {
-        responseType: 'blob'
-      });
+      try {
+        const downloadResponse = await axios.get(`http://localhost:8000/download/${decompressedFile}`, {
+          responseType: 'blob'
+        });
 
-      const url = window.URL.createObjectURL(new Blob([downloadResponse.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', decompressedFile);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+        const url = window.URL.createObjectURL(new Blob([downloadResponse.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', decompressedFile);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
 
-      message.success(`文件 ${file.name} 解压成功！`);
+        message.success(`文件 ${file.name} 解压成功！`);
+      } catch (downloadError) {
+        console.error('下载解压文件失败:', downloadError);
+        message.error('下载解压文件失败：' + downloadError.message);
+      }
     } catch (error) {
       message.destroy();
       console.error('解压失败:', error);
-      message.error('文件解压失败：' + error.message);
+      message.error('文件解压失败：' + (error.response?.data?.detail || error.message));
     }
   };
 
