@@ -3,7 +3,11 @@ node_modules/
 .idea/
 __pycache__/
 *.pyc
-compressed/
-decompressed/
-shared/
-uploads/
+backend/compressed/**
+!backend/compressed/.gitkeep
+backend/decompressed/**
+!backend/decompressed/.gitkeep
+backend/shared/**
+!backend/shared/.gitkeep
+backend/uploads/**
+!backend/uploads/.gitkeep
