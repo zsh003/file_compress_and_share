@@ -3,3 +3,7 @@ node_modules/
 .idea/
 __pycache__/
 *.pyc
+compressed/*
+decompressed/*
+shared/*
+uploads/*
