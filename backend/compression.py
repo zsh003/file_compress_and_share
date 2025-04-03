@@ -86,7 +86,7 @@ class LZ77Compressor:
             compression_ratio = (1 - final_size / self.original_size) * 100
             time_elapsed = time.time() - self.start_time
             
-            self.progress_callback({
+            await self.progress_callback({
                 'type': 'complete',
                 'filename': os.path.basename(output_path),
                 'originalSize': self.original_size,
@@ -153,7 +153,7 @@ class HuffmanCompressor:
         self.huffman_codes = dict(current_code)
         self.reverse_mapping = {v: k for k, v in self.huffman_codes.items()}
 
-    def compress(self, input_path, output_path):
+    async def compress(self, input_path, output_path):
         self.start_time = time.time()
         
         with open(input_path, 'rb') as file:
@@ -180,7 +180,7 @@ class HuffmanCompressor:
                 compression_ratio = (1 - current_size / self.original_size) * 100
                 time_elapsed = time.time() - self.start_time
                 
-                self.progress_callback({
+                await self.progress_callback({
                     'type': 'progress',
                     'progress': progress,
                     'originalSize': self.original_size,
@@ -210,7 +210,7 @@ class HuffmanCompressor:
                 compression_ratio = (1 - current_size / self.original_size) * 100
                 time_elapsed = time.time() - self.start_time
                 
-                self.progress_callback({
+                await self.progress_callback({
                     'type': 'progress',
                     'progress': progress,
                     'originalSize': self.original_size,
@@ -236,7 +236,7 @@ class HuffmanCompressor:
             compression_ratio = (1 - final_size / self.original_size) * 100
             time_elapsed = time.time() - self.start_time
             
-            self.progress_callback({
+            await self.progress_callback({
                 'type': 'complete',
                 'filename': os.path.basename(output_path),
                 'originalSize': self.original_size,
@@ -321,7 +321,7 @@ class ZipCompressor:
                 time.sleep(0.05)  # 模拟压缩过程
         
         if self.progress_callback:
-            self.progress_callback({
+            await self.progress_callback({
                 'type': 'complete',
                 'filename': os.path.basename(output_path)
             })

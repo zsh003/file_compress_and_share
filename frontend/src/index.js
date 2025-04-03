@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Upload, Button, Radio, message, Card, Typography, Progress, Space, Divider, Steps } from 'antd';
-import { UploadOutlined, DownloadOutlined, InboxOutlined, FileOutlined, CompressOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { UploadOutlined, DownloadOutlined, InboxOutlined, FileOutlined, CompressOutlined, CheckCircleOutlined, StopOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { createRoot } from 'react-dom/client';
 
@@ -10,9 +10,9 @@ const { Step } = Steps;
 
 // 配置axios拦截器
 axios.interceptors.request.use(
-  config => {
-    console.log('请求配置:', config);
-    return config;
+  request => {
+    console.log('请求数据:', request);
+    return request;
   },
   error => {
     console.error('请求错误:', error);
@@ -44,12 +44,14 @@ function Index() {
     compressionRatio: 0,
     timeElapsed: 0
   });
+  const [compressionTaskId, setCompressionTaskId] = useState(null);
 
   // 使用WebSocket监听压缩进度
   useEffect(() => {
     let ws = null;
+    let pingInterval = null;
     let reconnectAttempts = 0;
-    const maxReconnectAttempts = 2;
+    const maxReconnectAttempts = 3;
     const reconnectDelay = 1000; // 1秒
 
     const connectWebSocket = () => {
@@ -62,29 +64,47 @@ function Index() {
       ws.onopen = () => {
         console.log('WebSocket连接已建立');
         reconnectAttempts = 0;
+        // 开启心跳检测
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+              ws.send("ping");
+          }
+        }, 25000); // 25秒发送一次心跳
       };
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          console.log('收到WebSocket消息:', data);
-          
-          if (data.type === 'progress') {
-            setCompressionProgress(data.progress);
-            setCompressionDetails({
-              originalSize: data.originalSize,
-              compressedSize: data.compressedSize,
-              compressionRatio: data.compressionRatio,
-              timeElapsed: data.timeElapsed
-            });
-          } else if (data.type === 'complete') {
-            setCurrentStep(2);
-            setIsCompressing(false);
-            message.success('文件压缩完成！');
-          } else if (data.type === 'error') {
-            setIsCompressing(false);
-            setCurrentStep(0);
-            message.error('压缩过程出错：' + data.message);
+          // 处理心跳响应
+          if (event.data === 'pong') {
+            console.log('收到心跳响应');
+            return;
+          } else {
+            const data = JSON.parse(event.data);
+            console.log('收到WebSocket消息:', data);
+            if (data.type === 'progress') {
+              setCompressionProgress(data.progress);
+              setCompressionDetails({
+                originalSize: data.originalSize,
+                compressedSize: data.compressedSize,
+                compressionRatio: data.compressionRatio,
+                timeElapsed: data.timeElapsed
+              });
+            } else if (data.type === 'complete') {
+              setCurrentStep(2);
+              setIsCompressing(false);
+              setCompressionTaskId(null);
+              message.success('文件压缩完成！');
+            } else if (data.type === 'error') {
+              setIsCompressing(false);
+              setCurrentStep(0);
+              setCompressionTaskId(null);
+              message.error('压缩过程出错：' + data.message);
+            } else if (data.type === 'stopped') {
+              setIsCompressing(false);
+              setCurrentStep(0);
+              setCompressionTaskId(null);
+              message.info('压缩已停止');
+            }
           }
         } catch (error) {
           console.error('处理WebSocket消息时出错:', error);
@@ -97,6 +117,7 @@ function Index() {
 
       ws.onclose = () => {
         console.log('WebSocket连接已关闭');
+        clearInterval(pingInterval);
         if (reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++;
           console.log(`尝试重新连接 (${reconnectAttempts}/${maxReconnectAttempts})...`);
@@ -108,16 +129,28 @@ function Index() {
       };
     };
 
-    if (isCompressing) {
-      connectWebSocket();
-    }
+    connectWebSocket();
 
     return () => {
-      if (ws) {
-        ws.close();
-      }
+      clearInterval(pingInterval);
+      if (ws) ws.close();
     };
-  }, [isCompressing]);
+  }, []);
+
+  const handleStopCompression = async () => {
+    if (!compressionTaskId) {
+      message.warning('没有正在进行的压缩任务');
+      return;
+    }
+
+    try {
+      await axios.post(`http://localhost:8000/stop_compression/${compressionTaskId}`);
+      message.info('正在停止压缩...');
+    } catch (error) {
+      console.error('停止压缩失败:', error);
+      message.error('停止压缩失败：' + error.message);
+    }
+  };
 
   const handleUpload = async (file) => {
     const formData = new FormData();
@@ -149,11 +182,13 @@ function Index() {
 
       const response = await axios.post('http://localhost:8000/upload', formData, config);
       console.log('请求完成响应:', response.data);
+      setCompressionTaskId(response.data.taskId);
     } catch (error) {
       console.error('请求失败:', error);
       message.error('请求失败：' + error.message);
       setIsCompressing(false);
       setCurrentStep(0);
+      //setCompressionTaskId(null);
     }
   };
 
@@ -250,13 +285,24 @@ function Index() {
           
           <div style={{ marginBottom: 24 }}>
             <Title level={4}>上传文件：</Title>
-            <Upload
-              beforeUpload={handleUpload}
-              showUploadList={false}
-              maxCount={1}
-            >
-              <Button icon={<UploadOutlined />}>选择文件</Button>
-            </Upload>
+            <Space>
+              <Upload
+                beforeUpload={handleUpload}
+                showUploadList={false}
+                maxCount={1}
+              >
+                <Button icon={<UploadOutlined />}>选择文件</Button>
+              </Upload>
+              {isCompressing && (
+                <Button 
+                  danger 
+                  onClick={handleStopCompression}
+                  icon={<StopOutlined />}
+                >
+                  停止压缩
+                </Button>
+              )}
+            </Space>
             
             {isCompressing && (
               <div style={{ marginTop: 16 }}>
