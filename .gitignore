@@ -11,3 +11,4 @@ backend/shared/**
 !backend/shared/.gitkeep
 backend/uploads/**
 !backend/uploads/.gitkeep
+backend/alembic/versions/

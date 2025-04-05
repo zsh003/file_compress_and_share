@@ -6,3 +6,6 @@ passlib==1.7.4
 bcrypt==4.0.1
 uvicorn[standard]
 rarfile==4.2
+alembic==1.12.0
+mysqlclient==2.2.7
+SQLAlchemy==2.0.40
