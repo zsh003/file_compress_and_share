@@ -257,7 +257,6 @@ export const FileCompressor = () => {
       f.id === selectedFile.id ? { ...f, shareInfo } : f
     ));
     setShowShareModal(false);
-    message.success('文件分享成功');
   };
 
   const handleDecompress = async (file) => {

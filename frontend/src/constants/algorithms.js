@@ -2,7 +2,8 @@
 export const ALGORITHMS = {
   ZIP: 'zip',
   HUFFMAN: 'huffman',
-  LZ77: 'lz77'
+  LZ77: 'lz77',
+  COMBINED: 'combined'
 };
 
 // 获取算法显示名称
@@ -10,7 +11,8 @@ export const getAlgorithmDisplayName = (algorithm) => {
   const displayNames = {
     [ALGORITHMS.ZIP]: 'ZIP',
     [ALGORITHMS.HUFFMAN]: 'Huffman',
-    [ALGORITHMS.LZ77]: 'LZ77'
+    [ALGORITHMS.LZ77]: 'LZ77',
+    [ALGORITHMS.COMBINED]: 'LZ77+Huffman'
   };
   return displayNames[algorithm] || algorithm;
 };
@@ -24,6 +26,8 @@ export const getAlgorithmDescription = (algorithm) => {
       return '使用哈夫曼编码进行压缩，适合文本文件';
     case ALGORITHMS.LZ77:
       return '使用LZ77算法进行压缩，适合重复数据较多的文件';
+    case ALGORITHMS.COMBINED:
+      return '使用LZ77和哈夫曼编码的组合进行压缩，适合文本文件和重复数据较多的文件';
     default:
       return '';
   }
@@ -32,9 +36,17 @@ export const getAlgorithmDescription = (algorithm) => {
 // 获取算法标签颜色
 export const getAlgorithmColor = (algorithm) => {
   const colors = {
-    [ALGORITHMS.ZIP]: '#e6f7ff',
-    [ALGORITHMS.HUFFMAN]: '#f6ffed',
-    [ALGORITHMS.LZ77]: '#fff7e6'
+    [ALGORITHMS.ZIP]: '#50b3df',
+    [ALGORITHMS.HUFFMAN]: '#68e85a',
+    [ALGORITHMS.LZ77]: '#ddce48',
+    [ALGORITHMS.COMBINED]: '#fda370'
   };
-  return colors[algorithm] || '#f0f0f0';
+  return colors[algorithm] || '#ffffff';
+};
+
+export const ALGORITHM_LABELS = {
+  [ALGORITHMS.LZ77]: 'LZ77',
+  [ALGORITHMS.HUFFMAN]: '哈夫曼编码',
+  [ALGORITHMS.ZIP]: 'ZIP',
+  [ALGORITHMS.COMBINED]: 'LZ77+哈夫曼'
 }; 

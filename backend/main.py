@@ -17,11 +17,12 @@ import struct
 import zipfile
 from typing import Optional, Dict, List
 import uvicorn
-from compression import LZ77Compressor, HuffmanCompressor, ZipCompressor
+from compression import LZ77Compressor, HuffmanCompressor, ZipCompressor, CombinedCompressor
 import socket
 import secrets
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
+import shutil
 
 import models
 import schemas
@@ -282,6 +283,8 @@ async def upload_file(
             compressor = HuffmanCompressor()
         elif algorithm == "zip":
             compressor = ZipCompressor()
+        elif algorithm == "combined":
+            compressor = CombinedCompressor()
         else:
             raise HTTPException(status_code=400, detail="不支持的压缩算法")
 
@@ -475,6 +478,8 @@ async def decompress_file(
             compressor = HuffmanCompressor()
         elif algorithm == "zip":
             compressor = ZipCompressor()
+        elif algorithm == "combined":
+            compressor = CombinedCompressor()
         else:
             raise HTTPException(status_code=400, detail="不支持的压缩算法")
 
@@ -593,11 +598,28 @@ async def share_file(
         if not db_file or db_file.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="文件不存在")
 
+        # 检查源文件是否存在
+        print(db_file.filename)
+        source_file_path = os.path.join(COMPRESSED_DIR, f"{db_file.filename}.compressed")
+        if not os.path.exists(source_file_path):
+            print(f"压缩文件不存在: {source_file_path}")
+            raise HTTPException(status_code=404, detail="压缩文件不存在")
+
         # 生成分享ID和密码
         share_id = str(uuid.uuid4())
         password = None
         if share_info.is_password_protected:
             password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(6))
+
+        # 创建分享目录
+        share_dir = os.path.join(SHARED_DIR, share_id)
+        if not os.path.exists(share_dir):
+            os.makedirs(share_dir)
+
+        # 复制文件到分享目录，使用原始文件名加算法后缀
+        shared_file_path = os.path.join(share_dir, f"{db_file.filename}.compressed")
+        with open(source_file_path, 'rb') as src, open(shared_file_path, 'wb') as dst:
+            dst.write(src.read())
 
         # 创建分享记录
         db_share = crud.create_file_share(
@@ -627,6 +649,11 @@ async def share_file(
             "share_url": share_url
         }
     except Exception as e:
+        print(f"分享错误: {str(e)}")
+        # 如果出错，清理已创建的分享目录
+        share_dir = os.path.join(SHARED_DIR, share_id) if 'share_id' in locals() else None
+        if share_dir and os.path.exists(share_dir):
+            shutil.rmtree(share_dir)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/shared/{share_id}/download")
@@ -635,37 +662,42 @@ async def download_shared_file(
     password: Optional[str] = None,
     db: Session = Depends(database.get_db)
 ):
-    # 获取分享记录
-    share = crud.get_file_share(db, share_id)
-    if not share:
-        raise HTTPException(status_code=404, detail="分享链接不存在")
+    try:
+        # 获取分享记录
+        share = crud.get_file_share(db, share_id)
+        if not share:
+            raise HTTPException(status_code=404, detail="分享链接不存在")
 
-    # 验证分享是否有效
-    if not crud.check_share_validity(db, share):
-        raise HTTPException(status_code=400, detail="分享链接已过期或达到下载次数限制")
+        # 验证分享是否有效
+        if not crud.check_share_validity(db, share):
+            raise HTTPException(status_code=400, detail="分享链接已过期或达到下载次数限制")
 
-    # 验证密码
-    if share.is_password_protected and share.password != password:
-        raise HTTPException(status_code=403, detail="密码错误")
+        # 验证密码
+        if share.is_password_protected and share.password != password:
+            raise HTTPException(status_code=403, detail="密码错误")
 
-    # 获取文件
-    db_file = crud.get_file(db, share.file_id)
-    if not db_file:
-        raise HTTPException(status_code=404, detail="文件不存在")
+        # 获取文件
+        db_file = crud.get_file(db, share.file_id)
+        if not db_file:
+            raise HTTPException(status_code=404, detail="文件不存在")
 
-    # 更新下载次数
-    crud.update_share_download_count(db, share_id)
+        # 更新下载次数
+        crud.update_share_download_count(db, share_id)
 
-    # 返回文件
-    file_path = os.path.join(COMPRESSED_DIR, f"{db_file.filename}.{db_file.algorithm}")
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="文件不存在")
+        # 构建文件路径
+        file_path = os.path.join(COMPRESSED_DIR, f"{db_file.filename}")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
 
-    return FileResponse(
-        file_path,
-        filename=f"{db_file.filename}.{db_file.algorithm}",
-        media_type="application/octet-stream"
-    )
+        # 返回文件
+        return FileResponse(
+            file_path,
+            filename=db_file.filename,
+            media_type="application/octet-stream"
+        )
+    except Exception as e:
+        print(f"下载分享文件错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 用户文件列表
 @app.get("/files", response_model=List[schemas.File])

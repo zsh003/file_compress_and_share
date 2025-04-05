@@ -23,6 +23,8 @@ export const ShareModal = ({ visible, onClose, file, token, onShareSuccess }) =>
         }
       );
 
+      console.log('分享响应:', response.data);
+
       const newShareInfo = {
         shareLink: response.data.share_url,
         password: response.data.password,
@@ -30,10 +32,13 @@ export const ShareModal = ({ visible, onClose, file, token, onShareSuccess }) =>
         maxDownloads: response.data.max_downloads
       };
 
+      console.log('分享信息:', newShareInfo);
+
       setShareInfo(newShareInfo);
       onShareSuccess(newShareInfo);
       message.success('文件分享成功');
     } catch (error) {
+      console.error('分享错误:', error);
       message.error('文件分享失败: ' + (error.response?.data?.detail || error.message));
     } finally {
       setLoading(false);

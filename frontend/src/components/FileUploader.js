@@ -25,6 +25,7 @@ export const FileUploader = ({
           <Radio.Button value={ALGORITHMS.ZIP}>ZIP压缩</Radio.Button>
           <Radio.Button value={ALGORITHMS.HUFFMAN}>哈夫曼编码</Radio.Button>
           <Radio.Button value={ALGORITHMS.LZ77}>LZ77压缩</Radio.Button>
+          <Radio.Button value={ALGORITHMS.COMBINED}>LZ77+哈夫曼</Radio.Button>
         </Radio.Group>
         <div style={{ marginTop: 8, color: '#666' }}>
           {getAlgorithmDescription(algorithm)}

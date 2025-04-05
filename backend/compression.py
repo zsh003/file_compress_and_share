@@ -196,6 +196,7 @@ class HuffmanCompressor(BaseCompressor):
                 progress = 0.1 + (processed_symbols / total_symbols * 0.4)  # 10%-50%的进度
                 current_size = len(encoded_text) // 8
                 await self._report_progress(progress, current_size, original_size)
+                await asyncio.sleep(0.001)
 
         # 填充编码后的文本
         padding_length = 8 - (len(encoded_text) % 8)
@@ -372,3 +373,56 @@ class SevenZipCompressor:
     def decompress(self, input_path, output_path):
         with py7zr.SevenZipFile(input_path, 'r') as sz:
             sz.extractall(os.path.dirname(output_path)) 
+
+class CombinedCompressor:
+    def __init__(self):
+        self.lz77_compressor = LZ77Compressor()
+        self.huffman_compressor = HuffmanCompressor()
+        self.progress_callback = None
+
+    def set_progress_callback(self, callback):
+        self.progress_callback = callback
+        self.lz77_compressor.set_progress_callback(callback)
+        self.huffman_compressor.set_progress_callback(callback)
+
+    async def compress(self, input_path, output_path):
+        # 创建临时文件路径
+        temp_path = f"{output_path}.temp"
+        
+        try:
+            # 第一步：LZ77压缩
+            await self.lz77_compressor.compress(input_path, temp_path)
+            
+            # 第二步：Huffman压缩
+            await self.huffman_compressor.compress(temp_path, output_path)
+            
+            # 删除临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+        except Exception as e:
+            # 确保清理临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
+
+    async def decompress(self, input_path, output_path):
+        # 创建临时文件路径
+        temp_path = f"{output_path}.temp"
+        
+        try:
+            # 第一步：Huffman解压
+            await self.huffman_compressor.decompress(input_path, temp_path)
+            
+            # 第二步：LZ77解压
+            await self.lz77_compressor.decompress(temp_path, output_path)
+            
+            # 删除临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+        except Exception as e:
+            # 确保清理临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e 

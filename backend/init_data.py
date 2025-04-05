@@ -38,21 +38,21 @@ def init_test_data():
             {
                 "filename": "test1.txt",
                 "original_size": 1024,
-                "compressed_size": 512,
+                "compressed_size": 1022,
                 "algorithm": "zip",
                 "owner": created_users["admin"]
             },
             {
                 "filename": "test2.txt",
                 "original_size": 2048,
-                "compressed_size": 1024,
+                "compressed_size": 2044,
                 "algorithm": "lz77",
                 "owner": created_users["admin"]
             },
             {
                 "filename": "test3.txt",
                 "original_size": 4096,
-                "compressed_size": 2048,
+                "compressed_size": 4092,
                 "algorithm": "huffman",
                 "owner": created_users["test"]
             }
