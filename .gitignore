@@ -12,3 +12,4 @@ backend/shared/**
 backend/uploads/**
 !backend/uploads/.gitkeep
 backend/alembic/versions/
+sql_app.db

@@ -1,7 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Form, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Form, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
 import os
 import time
 import json
@@ -17,6 +19,17 @@ from typing import Optional, Dict, List
 import uvicorn
 from compression import LZ77Compressor, HuffmanCompressor, ZipCompressor
 import socket
+import secrets
+from datetime import datetime, timedelta
+
+import models
+import schemas
+import crud
+import auth
+import database
+
+# 创建数据库表
+models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
 
@@ -46,24 +59,20 @@ stop_flags: Dict[str, bool] = {}
 # 存储分享信息
 shared_files: Dict[str, Dict] = {}
 
-
 # 生成随机密码
 def generate_password(length=6):
     characters = string.ascii_letters + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
 
-
 # 生成分享ID
 def generate_share_id():
     return str(uuid.uuid4())
-
 
 async def send_compression_progress(websocket: WebSocket, data: dict):
     try:
         await websocket.send_text(json.dumps(data))
     except Exception as e:
         print(f"发送进度更新失败: {e}")
-
 
 @app.websocket("/ws/compression")
 async def websocket_endpoint(websocket: WebSocket):
@@ -83,6 +92,84 @@ async def websocket_endpoint(websocket: WebSocket):
         if client_id in active_connections:
             del active_connections[client_id]
 
+@app.post("/user/login")
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(database.get_db)
+):
+    user = auth.authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误"
+        )
+    
+    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = auth.create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user.username,
+        "user_id": user.id
+    }
+
+@app.post("/user/register", response_model=schemas.User)
+async def register(user: schemas.UserCreate, db: Session = Depends(database.get_db)):
+    # 检查用户名是否已存在
+    db_user = crud.get_user_by_username(db, username=user.username)
+    if db_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="用户名已存在"
+        )
+    
+    # 创建新用户
+    return crud.create_user(db=db, username=user.username, password=user.password)
+
+@app.get("/user/me", response_model=schemas.User)
+async def get_current_user_info(
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    return current_user
+
+@app.put("/user/update", response_model=schemas.User)
+async def update_user_info(
+    user_update: schemas.UserUpdate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    # 如果要更新用户名，先检查新用户名是否已存在
+    if user_update.username:
+        db_user = crud.get_user_by_username(db, username=user_update.username)
+        if db_user and db_user.id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="用户名已被使用"
+            )
+    
+    updated_user = crud.update_user(
+        db=db,
+        user_id=current_user.id,
+        username=user_update.username,
+        password=user_update.password
+    )
+    
+    if not updated_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
+        )
+    
+    return updated_user
+
+@app.post("/user/logout")
+async def logout():
+    # 由于使用的是JWT，后端不需要特殊处理
+    # 前端会清除localStorage中的token
+    return {"message": "退出登录成功"}
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), algorithm: str = Form("algorithm")):
@@ -146,7 +233,6 @@ async def upload_file(file: UploadFile = File(...), algorithm: str = Form("algor
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/stop_compression/{task_id}")
 async def stop_compression(task_id: str):
     if task_id not in compression_tasks:
@@ -186,7 +272,6 @@ async def stop_compression(task_id: str):
 
     return {"message": "压缩任务已停止"}
 
-
 async def compress_file(compressor, input_path, output_path, task_id):
     try:
         # 异步压缩
@@ -223,7 +308,6 @@ async def compress_file(compressor, input_path, output_path, task_id):
             del compression_tasks[task_id]
         if task_id in stop_flags:
             del stop_flags[task_id]
-
 
 @app.post("/decompress")
 async def decompress_file(file: UploadFile = File(...), algorithm: str = Form("algorithm")):
@@ -262,7 +346,6 @@ async def decompress_file(file: UploadFile = File(...), algorithm: str = Form("a
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 async def decompress_file_task(compressor, input_path, output_path):
     try:
         # 在单独的线程中执行解压
@@ -270,7 +353,6 @@ async def decompress_file_task(compressor, input_path, output_path):
         await loop.run_in_executor(None, compressor.decompress, input_path, output_path)
     except Exception as e:
         print(f"解压错误: {e}")
-
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
@@ -287,7 +369,6 @@ async def download_file(filename: str):
             raise HTTPException(status_code=404, detail="文件不存在")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # 分享文件
 @app.post("/share/{filename}")
@@ -328,7 +409,6 @@ async def share_file(filename: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 # 获取分享信息
 @app.get("/share/{share_id}")
 async def get_share_info(share_id: str):
@@ -340,7 +420,6 @@ async def get_share_info(share_id: str):
         "filename": share_info['filename'],
         "created_at": share_info['created_at']
     }
-
 
 # 验证密码并下载分享文件
 @app.get("/shared/{share_id}/{filename}")
@@ -357,10 +436,8 @@ async def download_shared_file(share_id: str, filename: str, password: str = Que
 
     return FileResponse(share_info['path'], filename=filename)
 
-
 # 挂载静态文件目录
 app.mount("/shared", StaticFiles(directory=SHARED_DIR), name="shared")
-
 
 # 获取服务器IP地址
 @app.get("/ip")
@@ -376,6 +453,143 @@ async def get_server_ip():
         # 如果获取失败，返回本地回环地址
         return {"ip": "127.0.0.1"}
 
+# 文件压缩相关路由
+@app.post("/compress")
+async def compress_file(
+    file: UploadFile = File(...),
+    algorithm: str = Form(...),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    # 生成任务ID
+    task_id = str(uuid.uuid4())
+    
+    try:
+        # 保存上传的文件
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+        # 获取文件大小
+        original_size = os.path.getsize(file_path)
+        
+        # 选择压缩算法
+        if algorithm == "lz77":
+            compressor = LZ77Compressor()
+        elif algorithm == "huffman":
+            compressor = HuffmanCompressor()
+        elif algorithm == "zip":
+            compressor = ZipCompressor()
+        else:
+            raise HTTPException(status_code=400, detail="不支持的压缩算法")
+
+        # 设置压缩输出路径
+        compressed_path = os.path.join(COMPRESSED_DIR, f"{file.filename}.{algorithm}")
+        
+        # 执行压缩
+        await compressor.compress(file_path, compressed_path)
+        
+        # 获取压缩后文件大小
+        compressed_size = os.path.getsize(compressed_path)
+        
+        # 创建文件记录
+        db_file = crud.create_file(
+            db=db,
+            filename=file.filename,
+            original_size=original_size,
+            compressed_size=compressed_size,
+            algorithm=algorithm,
+            owner_id=current_user.id
+        )
+
+        return {
+            "task_id": task_id,
+            "file_id": db_file.id,
+            "message": "文件压缩成功",
+            "compression_ratio": db_file.compression_ratio
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 文件分享相关路由
+@app.post("/share/{file_id}", response_model=schemas.FileShare)
+async def share_file(
+    file_id: int,
+    share_info: schemas.FileShareCreate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    # 检查文件是否存在且属于当前用户
+    db_file = crud.get_file(db, file_id)
+    if not db_file or db_file.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 生成分享ID和密码
+    share_id = str(uuid.uuid4())
+    password = None
+    if share_info.is_password_protected:
+        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(6))
+
+    # 创建分享记录
+    db_share = crud.create_file_share(
+        db=db,
+        file_id=file_id,
+        share_id=share_id,
+        password=password,
+        expiration_hours=share_info.expiration_hours,
+        max_downloads=share_info.max_downloads,
+        is_password_protected=share_info.is_password_protected
+    )
+
+    return db_share
+
+@app.get("/shared/{share_id}/download")
+async def download_shared_file(
+    share_id: str,
+    password: Optional[str] = None,
+    db: Session = Depends(database.get_db)
+):
+    # 获取分享记录
+    share = crud.get_file_share(db, share_id)
+    if not share:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+
+    # 验证分享是否有效
+    if not crud.check_share_validity(db, share):
+        raise HTTPException(status_code=400, detail="分享链接已过期或达到下载次数限制")
+
+    # 验证密码
+    if share.is_password_protected and share.password != password:
+        raise HTTPException(status_code=403, detail="密码错误")
+
+    # 获取文件
+    db_file = crud.get_file(db, share.file_id)
+    if not db_file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 更新下载次数
+    crud.update_share_download_count(db, share_id)
+
+    # 返回文件
+    file_path = os.path.join(COMPRESSED_DIR, f"{db_file.filename}.{db_file.algorithm}")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    return FileResponse(
+        file_path,
+        filename=f"{db_file.filename}.{db_file.algorithm}",
+        media_type="application/octet-stream"
+    )
+
+# 用户文件列表
+@app.get("/files", response_model=List[schemas.File])
+async def get_user_files(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    files = crud.get_user_files(db, current_user.id, skip=skip, limit=limit)
+    return files
