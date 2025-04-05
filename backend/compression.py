@@ -36,6 +36,20 @@ class BaseCompressor:
                 }
             })
 
+    async def _report_completion(self, final_size: int, original_size: int):
+        if self._progress_callback:
+            elapsed_time = time.time() - self._start_time
+            await self._progress_callback({
+                'type': 'completed',
+                'progress': 100,
+                'details': {
+                    'original_size': original_size,
+                    'current_size': final_size,
+                    'speed': 0,
+                    'time_elapsed': round(elapsed_time, 2)
+                }
+            })
+
 class LZ77Compressor(BaseCompressor):
     def __init__(self, window_size=4096, look_ahead_size=18):
         super().__init__()
@@ -98,7 +112,7 @@ class LZ77Compressor(BaseCompressor):
 
         # 报告完成
         final_size = os.path.getsize(output_path)
-        await self._report_progress(1.0, final_size, original_size)
+        await self._report_completion(final_size, original_size)
 
     async def decompress(self, input_path: str, output_path: str):
         with open(input_path, 'rb') as file:
@@ -216,7 +230,7 @@ class HuffmanCompressor(BaseCompressor):
 
         # 报告完成
         final_size = os.path.getsize(output_path)
-        await self._report_progress(1.0, final_size, original_size)
+        await self._report_completion(final_size, original_size)
 
     async def decompress(self, input_path: str, output_path: str):
         with open(input_path, 'rb') as file:
@@ -290,7 +304,7 @@ class ZipCompressor(BaseCompressor):
                         await self._report_progress(progress, bytes_written, original_size)
                 
                 # 报告完成
-                await self._report_progress(1.0, total_size, original_size)
+                await self._report_completion(total_size, original_size)
                 
         except Exception as e:
             print(f"压缩过程中出错: {str(e)}")

@@ -31,8 +31,6 @@ export const CompressionProgress = ({
     }
   }, [progressData, compressionSpeedData, compressionProgress]);
 
-  if (!isCompressing) return null;
-
   const getAlertType = () => {
     if (!compressionDetails.wsConnected) return 'warning';
     if (compressionProgress === 100) return 'success';

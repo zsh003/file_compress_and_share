@@ -249,7 +249,12 @@ async def logout():
     return {"message": "退出登录成功"}
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), algorithm: str = Form("algorithm")):
+async def upload_file(
+    file: UploadFile = File(...),
+    algorithm: str = Form("algorithm"),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
     try:
         # 生成任务ID
         task_id = str(uuid.uuid4())
@@ -298,7 +303,12 @@ async def upload_file(file: UploadFile = File(...), algorithm: str = Form("algor
 
         # 在后台任务中执行压缩
         compression_task = asyncio.create_task(compress_file(compressor, file_path, compressed_path, task_id))
-        compression_tasks[task_id] = compression_task
+        compression_tasks[task_id] = {
+            "task": compression_task,
+            "user_id": current_user.id,
+            "original_size": file_size,
+            "algorithm": algorithm
+        }
 
         return {
             "message": "文件上传成功，开始压缩",
@@ -322,7 +332,7 @@ async def stop_compression(task_id: str):
     try:
         # 等待任务取消，设置超时
         try:
-            await asyncio.wait_for(compression_tasks[task_id], timeout=1.0)
+            await asyncio.wait_for(compression_tasks[task_id]["task"], timeout=1.0)
         except asyncio.TimeoutError:
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 停止任务超时: {task_id}")
             # 即使超时也继续执行清理操作
@@ -351,6 +361,12 @@ async def stop_compression(task_id: str):
 
 async def compress_file(compressor, input_path, output_path, task_id):
     try:
+        # 获取任务信息
+        task_info = compression_tasks[task_id]
+        user_id = task_info["user_id"]
+        original_size = task_info["original_size"]
+        algorithm = task_info["algorithm"]
+
         # 异步压缩
         if asyncio.iscoroutinefunction(compressor.compress):
             await compressor.compress(input_path, output_path)
@@ -358,6 +374,44 @@ async def compress_file(compressor, input_path, output_path, task_id):
             # 保持向后兼容
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, compressor.compress, input_path, output_path)
+
+        # 获取压缩后的大小
+        compressed_size = os.path.getsize(output_path)
+        compression_ratio = (original_size - compressed_size) / original_size
+
+        # 保存文件信息到数据库
+        db = next(database.get_db())
+        try:
+            file_record = models.File(
+                filename=os.path.basename(input_path),
+                original_size=original_size,
+                compressed_size=compressed_size,
+                compression_ratio=compression_ratio,
+                algorithm=algorithm,
+                owner_id=user_id
+            )
+            db.add(file_record)
+            db.commit()
+            db.refresh(file_record)
+
+            # 发送完成消息
+            await send_compression_progress(active_connections[task_id], {
+                "type": "completed",
+                "progress": 100,
+                "details": {
+                    "original_size": original_size,
+                    "current_size": compressed_size,
+                    "compression_ratio": compression_ratio,
+                    "file_id": file_record.id
+                }
+            })
+
+        except Exception as e:
+            db.rollback()
+            raise e
+        finally:
+            db.close()
+
     except asyncio.CancelledError:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 压缩任务被取消: {task_id}")
         # 清理未完成的压缩文件
@@ -388,13 +442,28 @@ async def compress_file(compressor, input_path, output_path, task_id):
 
 
 @app.post("/decompress")
-async def decompress_file(file: UploadFile = File(...), algorithm: str = Form("algorithm")):
+async def decompress_file(
+    file: UploadFile = File(...),
+    algorithm: str = Form("algorithm"),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
     try:
+        # 生成任务ID
+        task_id = str(uuid.uuid4())
+        stop_flags[task_id] = False
+
         # 保存上传的压缩文件
         if file.filename is not None:
-            file_path = os.path.join(DECOMPRESSED_DIR, file.filename)
+            # 确保文件名不包含路径
+            filename = os.path.basename(file.filename)
+            file_path = os.path.join(UPLOAD_DIR, filename)
         else:
             raise HTTPException(status_code=400, detail="文件名不能为空")
+
+        # 确保上传目录存在
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
@@ -410,27 +479,75 @@ async def decompress_file(file: UploadFile = File(...), algorithm: str = Form("a
             raise HTTPException(status_code=400, detail="不支持的压缩算法")
 
         # 从压缩文件名中获取原始文件名
-        original_filename = file.filename.replace(".compressed", "")
+        original_filename = filename.replace(".compressed", "")
         decompressed_path = os.path.join(DECOMPRESSED_DIR, original_filename)
 
+        # 确保解压目录存在
+        os.makedirs(DECOMPRESSED_DIR, exist_ok=True)
+
         # 在后台任务中执行解压
-        asyncio.create_task(decompress_file_task(compressor, file_path, decompressed_path))
+        decompression_task = asyncio.create_task(decompress_file_task(compressor, file_path, decompressed_path, task_id))
+        compression_tasks[task_id] = {
+            "task": decompression_task,
+            "user_id": current_user.id
+        }
 
         return {
             "message": "文件上传成功，开始解压",
             "filename": original_filename,
-            "algorithm": algorithm
+            "algorithm": algorithm,
+            "taskId": task_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def decompress_file_task(compressor, input_path, output_path):
+async def decompress_file_task(compressor, input_path, output_path, task_id):
     try:
-        # 在单独的线程中执行解压
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, compressor.decompress, input_path, output_path)
+        # 异步解压
+        if asyncio.iscoroutinefunction(compressor.decompress):
+            await compressor.decompress(input_path, output_path)
+        else:
+            # 保持向后兼容
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, compressor.decompress, input_path, output_path)
+
+        # 发送完成消息
+        await send_compression_progress(active_connections[task_id], {
+            "type": "completed",
+            "progress": 100,
+            "details": {
+                "filename": os.path.basename(output_path)
+            }
+        })
+
+    except asyncio.CancelledError:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 解压任务被取消: {task_id}")
+        # 清理未完成的解压文件
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 已删除未完成的解压文件: {output_path}")
+            except Exception as e:
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 删除未完成的解压文件失败: {str(e)}")
+        raise
     except Exception as e:
-        print(f"解压错误: {e}")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 解压错误: {str(e)}")
+        # 通知客户端解压失败
+        for ws in active_connections.values():
+            try:
+                await send_compression_progress(ws, {
+                    'type': 'error',
+                    'message': str(e)
+                })
+            except Exception as ws_error:
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 发送错误通知失败: {str(ws_error)}")
+    finally:
+        # 清理任务相关资源
+        if task_id in compression_tasks:
+            del compression_tasks[task_id]
+        if task_id in stop_flags:
+            del stop_flags[task_id]
+
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
@@ -447,75 +564,6 @@ async def download_file(filename: str):
             raise HTTPException(status_code=404, detail="文件不存在")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# 分享文件
-@app.post("/share/{filename}")
-async def share_file(filename: str):
-    try:
-        # 检查文件是否存在
-        compressed_path = os.path.join(COMPRESSED_DIR, filename)
-        if not os.path.exists(compressed_path):
-            raise HTTPException(status_code=404, detail="文件不存在")
-
-        # 生成分享ID和密码
-        share_id = generate_share_id()
-        password = generate_password()
-
-        # 创建分享目录（如果不存在）
-        share_dir = os.path.join(SHARED_DIR, share_id)
-        if not os.path.exists(share_dir):
-            os.makedirs(share_dir)
-
-        # 复制文件到分享目录
-        shared_file_path = os.path.join(share_dir, filename)
-        with open(compressed_path, 'rb') as src, open(shared_file_path, 'wb') as dst:
-            dst.write(src.read())
-
-        # 存储分享信息
-        shared_files[share_id] = {
-            'filename': filename,
-            'password': password,
-            'path': shared_file_path,
-            'created_at': time.time()
-        }
-
-        return {
-            "share_id": share_id,
-            "password": password,
-            "download_url": f"/shared/{share_id}/{filename}"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 获取分享信息
-@app.get("/share/{share_id}")
-async def get_share_info(share_id: str):
-    if share_id not in shared_files:
-        raise HTTPException(status_code=404, detail="分享不存在")
-
-    share_info = shared_files[share_id]
-    return {
-        "filename": share_info['filename'],
-        "created_at": share_info['created_at']
-    }
-
-# 验证密码并下载分享文件
-@app.get("/shared/{share_id}/{filename}")
-async def download_shared_file(share_id: str, filename: str, password: str = Query(...)):
-    if share_id not in shared_files:
-        raise HTTPException(status_code=404, detail="分享不存在")
-
-    share_info = shared_files[share_id]
-    if share_info['password'] != password:
-        raise HTTPException(status_code=403, detail="密码错误")
-
-    if not os.path.exists(share_info['path']):
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    return FileResponse(share_info['path'], filename=filename)
-
-# 挂载静态文件目录
-app.mount("/shared", StaticFiles(directory=SHARED_DIR), name="shared")
 
 # 获取服务器IP地址
 @app.get("/ip")
@@ -539,29 +587,47 @@ async def share_file(
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(database.get_db)
 ):
-    # 检查文件是否存在且属于当前用户
-    db_file = crud.get_file(db, file_id)
-    if not db_file or db_file.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="文件不存在")
+    try:
+        # 检查文件是否存在且属于当前用户
+        db_file = crud.get_file(db, file_id)
+        if not db_file or db_file.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="文件不存在")
 
-    # 生成分享ID和密码
-    share_id = str(uuid.uuid4())
-    password = None
-    if share_info.is_password_protected:
-        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(6))
+        # 生成分享ID和密码
+        share_id = str(uuid.uuid4())
+        password = None
+        if share_info.is_password_protected:
+            password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(6))
 
-    # 创建分享记录
-    db_share = crud.create_file_share(
-        db=db,
-        file_id=file_id,
-        share_id=share_id,
-        password=password,
-        expiration_hours=share_info.expiration_hours,
-        max_downloads=share_info.max_downloads,
-        is_password_protected=share_info.is_password_protected
-    )
+        # 创建分享记录
+        db_share = crud.create_file_share(
+            db=db,
+            file_id=file_id,
+            share_id=share_id,
+            password=password,
+            expiration_hours=share_info.expiration_hours,
+            max_downloads=share_info.max_downloads,
+            is_password_protected=share_info.is_password_protected
+        )
 
-    return db_share
+        # 构建完整的分享链接
+        server_ip = await get_server_ip()
+        share_url = f"http://{server_ip['ip']}:8000/shared/{share_id}/download"
+        
+        return {
+            "id": db_share.id,
+            "share_id": share_id,
+            "file_id": file_id,
+            "password": password,
+            "created_at": db_share.created_at,
+            "expires_at": db_share.expires_at,
+            "max_downloads": db_share.max_downloads,
+            "current_downloads": db_share.current_downloads,
+            "is_password_protected": db_share.is_password_protected,
+            "share_url": share_url
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/shared/{share_id}/download")
 async def download_shared_file(

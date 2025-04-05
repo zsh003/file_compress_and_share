@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { message, Modal } from 'antd';
 import { FileUploader } from './FileUploader';
 import { CompressionProgress } from './CompressionProgress';
@@ -17,7 +17,13 @@ export const FileCompressor = () => {
   const [isStopping, setIsStopping] = useState(false);
   const [compressionProgress, setCompressionProgress] = useState(0);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [compressionDetails, setCompressionDetails] = useState({});
+  const [compressionDetails, setCompressionDetails] = useState({
+    wsConnected: false,
+    original_size: 0,
+    current_size: 0,
+    speed: 0,
+    time_elapsed: 0
+  });
   const [compressionTaskId, setCompressionTaskId] = useState(null);
   const [compressionStartTime, setCompressionStartTime] = useState(null);
   const [progressData, setProgressData] = useState([]);
@@ -121,7 +127,7 @@ export const FileCompressor = () => {
               speed: data.details.speed
             }]);
           }
-        } else if (data.type === 'complete') {
+        } else if (data.type === 'completed') {
           handleCompressionComplete(data);
         } else if (data.type === 'error') {
           message.error(data.error || '压缩过程中出现错误');
@@ -201,14 +207,19 @@ export const FileCompressor = () => {
     setCompressionStartTime(null);
     setProgressData([]);
     setCompressionSpeedData([]);
+    
+    // 刷新文件列表
+    fetchFiles();
   };
 
   const handleStopCompression = () => {
+    // 立即关闭WebSocket连接
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
     setIsCompressing(false);
+    setIsStopping(false);
     setCompressionDetails(prev => ({
       ...prev,
       wsConnected: false
@@ -240,35 +251,147 @@ export const FileCompressor = () => {
     setShowShareModal(true);
   };
 
+  const handleShareSuccess = (shareInfo) => {
+    // 更新文件列表中的分享信息
+    setFiles(prev => prev.map(f => 
+      f.id === selectedFile.id ? { ...f, shareInfo } : f
+    ));
+    setShowShareModal(false);
+    message.success('文件分享成功');
+  };
+
   const handleDecompress = async (file) => {
     try {
-      const response = await axiosInstance.post(`/decompress/${file.compressedName}`);
+      // 创建FormData对象
+      const formData = new FormData();
+      // 获取压缩文件
+      const response = await axiosInstance.get(`/download/${file.compressedName}`, {
+        responseType: 'blob'
+      });
+      
+      // 创建File对象
+      const compressedFile = new File([response.data], file.compressedName, {
+        type: 'application/octet-stream'
+      });
+      
+      // 添加到FormData
+      formData.append('file', compressedFile);
+      formData.append('algorithm', file.algorithm);
+
+      // 发送解压请求
+      const decompressResponse = await axiosInstance.post('/decompress', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
       message.success('文件解压成功');
       // 自动下载解压后的文件
-      handleDownload(response.data.decompressed_name);
+      handleDownload(decompressResponse.data.filename);
     } catch (error) {
-      message.error('文件解压失败');
+      message.error('文件解压失败: ' + (error.response?.data?.detail || error.message));
     }
   };
 
   const handleCopyShareLink = async (link) => {
-    if (await copyToClipboard(link)) {
+    try {
+      await navigator.clipboard.writeText(link);
       message.success('分享链接已复制到剪贴板');
-    } else {
+    } catch (error) {
       message.error('复制失败');
     }
   };
 
   const handleCopyPassword = async (password) => {
-    if (await copyToClipboard(password)) {
+    try {
+      await navigator.clipboard.writeText(password);
       message.success('分享密码已复制到剪贴板');
-    } else {
+    } catch (error) {
       message.error('复制失败');
     }
   };
 
+  const handleWebSocketMessage = (event) => {
+    const data = JSON.parse(event.data);
+    
+    if (data.type === 'progress') {
+      setCompressionProgress(data.progress);
+      setCompressionDetails(data.details);
+      
+      // 更新进度数据
+      const time = data.details.time_elapsed;
+      setProgressData(prev => [...prev, { time, progress: data.progress }]);
+      setCompressionSpeedData(prev => [...prev, { time, speed: data.details.speed }]);
+    } else if (data.type === 'completed') {
+      // 立即关闭WebSocket连接
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      handleCompressionComplete(data);
+    } else if (data.type === 'error') {
+      // 立即关闭WebSocket连接
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      message.error(data.error || '压缩过程中出现错误');
+      setIsCompressing(false);
+      setCompressionDetails(prev => ({
+        ...prev,
+        wsConnected: false
+      }));
+    }
+  };
+
+  const fetchFiles = async () => {
+    try {
+      const response = await axiosInstance.get('/files');
+      // 确保文件数据格式正确
+      const formattedFiles = response.data.map(file => ({
+        id: file.id,
+        originalName: file.filename,
+        compressedName: `${file.filename}.compressed`,
+        algorithm: file.algorithm,
+        size: file.original_size,
+        compressedSize: file.compressed_size,
+        compressionRatio: file.compression_ratio,
+        shareInfo: file.shareInfo,
+        createdAt: file.created_at
+      }));
+      setFiles(formattedFiles);
+    } catch (error) {
+      console.error('获取文件列表失败:', error);
+      message.error('获取文件列表失败');
+    }
+  };
+
+  // 组件加载时获取文件列表
+  useEffect(() => {
+    fetchFiles();
+  }, []);
+
+  // 添加WebSocket关闭事件处理
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (ws) {
+      ws.onclose = (event) => {
+        console.log('WebSocket连接已关闭:', event.code, event.reason);
+        setCompressionDetails(prev => ({
+          ...prev,
+          wsConnected: false
+        }));
+      };
+    }
+    return () => {
+      if (ws) {
+        ws.close();
+      }
+    };
+  }, []);
+
   return (
-    <div>
+    <div style={{ padding: '24px' }}>
       <FileUploader
         algorithm={algorithm}
         onAlgorithmChange={handleAlgorithmChange}
@@ -285,7 +408,6 @@ export const FileCompressor = () => {
         compressionProgress={compressionProgress}
         compressionDetails={compressionDetails}
         compressionTaskId={compressionTaskId}
-        ws={wsRef.current}
         compressionStartTime={compressionStartTime}
         progressData={progressData}
         compressionSpeedData={compressionSpeedData}
@@ -300,18 +422,13 @@ export const FileCompressor = () => {
         onCopyPassword={handleCopyPassword}
       />
 
-      {showShareModal && (
+      {showShareModal && selectedFile && (
         <ShareModal
           visible={showShareModal}
           onClose={() => setShowShareModal(false)}
           file={selectedFile}
           token={token}
-          onShareSuccess={(shareInfo) => {
-            setFiles(prev => prev.map(f => 
-              f === selectedFile ? { ...f, shareInfo } : f
-            ));
-            setShowShareModal(false);
-          }}
+          onShareSuccess={handleShareSuccess}
         />
       )}
     </div>
