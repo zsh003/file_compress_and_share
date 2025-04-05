@@ -7,7 +7,7 @@ import { ShareModal } from './ShareModal';
 import { ALGORITHMS } from '../constants/algorithms';
 import { copyToClipboard } from '../utils/fileUtils';
 import { useAuth } from '../contexts/AuthContext';
-import axios from 'axios';
+import axiosInstance from '../utils/axios';
 
 export const FileCompressor = () => {
   const { token } = useAuth();
@@ -33,11 +33,6 @@ export const FileCompressor = () => {
   };
 
   const handleFileUpload = async (file) => {
-    if (!token) {
-      message.error('请先登录');
-      return false;
-    }
-
     setIsCompressing(true);
     setCompressionStartTime(Date.now());
     startTimeRef.current = Date.now();
@@ -45,77 +40,131 @@ export const FileCompressor = () => {
     setCompressionSpeedData([]);
     setUploadProgress(0);
     setCompressionProgress(0);
+    setCompressionDetails({
+      wsConnected: false,
+      original_size: 0,
+      current_size: 0,
+      speed: 0,
+      time_elapsed: 0
+    });
 
     const formData = new FormData();
     formData.append('file', file);
     formData.append('algorithm', algorithm);
 
     try {
-      const response = await axios.post('http://localhost:8000/compress', formData, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
+      // 先建立WebSocket连接
+      const token = localStorage.getItem('token');
+      const taskId = crypto.randomUUID(); // 生成一个新的任务ID
+      setCompressionTaskId(taskId);
+      
+      console.log('准备建立WebSocket连接...');
+      const ws = new WebSocket(`ws://localhost:8000/ws/compression?token=Bearer ${token}&task_id=${taskId}`);
+      
+      // 等待WebSocket连接建立
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('WebSocket连接超时'));
+        }, 5000);
+
+        ws.onopen = () => {
+          clearTimeout(timeout);
+          console.log('WebSocket连接已建立');
+          resolve();
+        };
+
+        ws.onerror = (error) => {
+          clearTimeout(timeout);
+          console.error('WebSocket连接错误:', error);
+          reject(error);
+        };
+      });
+
+      wsRef.current = ws;
+      setCompressionDetails(prev => ({
+        ...prev,
+        wsConnected: true
+      }));
+
+      // WebSocket连接建立后，再上传文件
+      const response = await axiosInstance.post('/upload', formData, {
         onUploadProgress: (progressEvent) => {
           const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
           setUploadProgress(progress);
         }
       });
 
-      const { task_id } = response.data;
-      setCompressionTaskId(task_id);
-      connectWebSocket(task_id);
+      console.log('文件上传成功，开始压缩...');
+
+      // 设置WebSocket消息处理
+      ws.onmessage = (event) => {
+        console.log('收到WebSocket消息:', event.data);
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'progress') {
+          const elapsedTime = (Date.now() - startTimeRef.current) / 1000;
+          setCompressionProgress(data.progress);
+          setCompressionDetails(prev => ({
+            ...prev,
+            ...data.details,
+            wsConnected: true
+          }));
+          
+          setProgressData(prev => [...prev, {
+            time: elapsedTime.toFixed(2),
+            progress: data.progress
+          }]);
+
+          if (data.details && data.details.speed) {
+            setCompressionSpeedData(prev => [...prev, {
+              time: elapsedTime.toFixed(2),
+              speed: data.details.speed
+            }]);
+          }
+        } else if (data.type === 'complete') {
+          handleCompressionComplete(data);
+        } else if (data.type === 'error') {
+          message.error(data.message || '压缩过程中出现错误');
+          setIsCompressing(false);
+          setCompressionDetails(prev => ({
+            ...prev,
+            wsConnected: false
+          }));
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket错误:', error);
+        message.error('WebSocket连接错误');
+        setIsCompressing(false);
+        setCompressionDetails(prev => ({
+          ...prev,
+          wsConnected: false
+        }));
+      };
+
+      ws.onclose = (event) => {
+        console.log('WebSocket连接已关闭:', event.code, event.reason);
+        setCompressionDetails(prev => ({
+          ...prev,
+          wsConnected: false
+        }));
+        if (event.code === 1006) {
+          message.error('WebSocket连接异常断开');
+          setIsCompressing(false);
+        }
+      };
 
       return false; // 阻止默认上传行为
     } catch (error) {
-      message.error('文件上传失败');
+      console.error('上传或连接出错:', error);
+      message.error(error.message || '文件上传失败');
       setIsCompressing(false);
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
       return false;
     }
-  };
-
-  const connectWebSocket = (taskId) => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-
-    const ws = new WebSocket(`ws://localhost:8000/ws/${taskId}`);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      
-      if (data.type === 'progress') {
-        const elapsedTime = (Date.now() - startTimeRef.current) / 1000;
-        setCompressionProgress(data.progress);
-        setCompressionDetails(data.details || {});
-        
-        setProgressData(prev => [...prev, {
-          time: elapsedTime.toFixed(2),
-          progress: data.progress
-        }]);
-
-        if (data.details && data.details.speed) {
-          setCompressionSpeedData(prev => [...prev, {
-            time: elapsedTime.toFixed(2),
-            speed: data.details.speed
-          }]);
-        }
-      } else if (data.type === 'complete') {
-        handleCompressionComplete(data);
-      } else if (data.type === 'error') {
-        message.error(data.message || '压缩过程中出现错误');
-        setIsCompressing(false);
-      }
-    };
-
-    ws.onerror = () => {
-      message.error('WebSocket连接错误');
-      setIsCompressing(false);
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket连接已关闭');
-    };
   };
 
   const handleCompressionComplete = (data) => {
@@ -141,11 +190,7 @@ export const FileCompressor = () => {
 
     setIsStopping(true);
     try {
-      await axios.post(`http://localhost:8000/stop_compression/${compressionTaskId}`, null, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      await axiosInstance.post(`/stop_compression/${compressionTaskId}`);
       message.success('已停止压缩');
     } catch (error) {
       message.error('停止压缩失败');
@@ -160,11 +205,8 @@ export const FileCompressor = () => {
 
   const handleDownload = async (fileName) => {
     try {
-      const response = await axios.get(`http://localhost:8000/download/${fileName}`, {
-        responseType: 'blob',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      const response = await axiosInstance.get(`/download/${fileName}`, {
+        responseType: 'blob'
       });
       
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -187,11 +229,7 @@ export const FileCompressor = () => {
 
   const handleDecompress = async (file) => {
     try {
-      const response = await axios.post(`http://localhost:8000/decompress/${file.compressedName}`, null, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await axiosInstance.post(`/decompress/${file.compressedName}`);
       message.success('文件解压成功');
       // 自动下载解压后的文件
       handleDownload(response.data.decompressed_name);

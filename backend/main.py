@@ -21,6 +21,7 @@ from compression import LZ77Compressor, HuffmanCompressor, ZipCompressor
 import socket
 import secrets
 from datetime import datetime, timedelta
+from jose import jwt, JWTError
 
 import models
 import schemas
@@ -75,22 +76,63 @@ async def send_compression_progress(websocket: WebSocket, data: dict):
         print(f"发送进度更新失败: {e}")
 
 @app.websocket("/ws/compression")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    client_id = str(id(websocket))
-    active_connections[client_id] = websocket
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] WebSocket连接建立: {client_id}")
-
+async def websocket_endpoint(
+    websocket: WebSocket,
+    token: str = Query(...),
+    task_id: str = Query(...),
+    db: Session = Depends(database.get_db)
+):
     try:
-        while True:
-            # 等待消息，但不处理心跳
-            await websocket.receive_text()
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 收到WebSocket连接请求: {task_id}")
+        # 验证token
+        if not token:
+            await websocket.close(code=4001, reason="未提供认证token")
+            return
+
+        try:
+            # 从token中提取实际的token值（去掉Bearer前缀）
+            if not token.startswith('Bearer '):
+                await websocket.close(code=4001, reason="无效的认证方式")
+                return
+            
+            token_value = token.split(' ')[1]
+
+            # 验证token并获取用户信息
+            payload = jwt.decode(token_value, auth.SECRET_KEY, algorithms=[auth.ALGORITHM])
+            username = payload.get("sub")
+            if not username:
+                await websocket.close(code=4001, reason="无效的token")
+                return
+
+            user = db.query(models.User).filter(models.User.username == username).first()
+            if not user:
+                await websocket.close(code=4001, reason="用户不存在")
+                return
+
+        except (JWTError, ValueError) as e:
+            print(f"Token验证错误: {str(e)}")
+            await websocket.close(code=4001, reason="无效的token")
+            return
+
+        await websocket.accept()
+        client_id = f"{task_id}_{str(id(websocket))}"
+        active_connections[client_id] = websocket
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] WebSocket连接建立: {client_id}")
+
+        try:
+            while True:
+                # 等待消息，但不处理
+                await websocket.receive_text()
+        except Exception as e:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] WebSocket错误[{client_id}]: {str(e)}")
+        finally:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 连接关闭: {client_id}")
+            if client_id in active_connections:
+                del active_connections[client_id]
     except Exception as e:
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] WebSocket错误[{client_id}]: {str(e)}")
-    finally:
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 连接关闭: {client_id}")
-        if client_id in active_connections:
-            del active_connections[client_id]
+        print(f"WebSocket处理错误: {str(e)}")
+        if not websocket.client_state.disconnected:
+            await websocket.close(code=1011, reason=str(e))
 
 @app.post("/user/login")
 async def login(
@@ -109,11 +151,46 @@ async def login(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
     
+    # 生成refresh token
+    refresh_token = auth.create_refresh_token(data={"sub": user.username})
+    
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "username": user.username,
         "user_id": user.id
+    }
+
+@app.post("/user/refresh_token")
+async def refresh_token(
+    refresh_token: str = Form(...),
+    db: Session = Depends(database.get_db)
+):
+    username = auth.verify_refresh_token(refresh_token)
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的refresh token"
+        )
+
+    # 验证用户是否存在
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在"
+        )
+
+    # 生成新的access token
+    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = auth.create_access_token(
+        data={"sub": username}, expires_delta=access_token_expires
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
     }
 
 @app.post("/user/register", response_model=schemas.User)
@@ -309,6 +386,7 @@ async def compress_file(compressor, input_path, output_path, task_id):
         if task_id in stop_flags:
             del stop_flags[task_id]
 
+
 @app.post("/decompress")
 async def decompress_file(file: UploadFile = File(...), algorithm: str = Form("algorithm")):
     try:
@@ -452,66 +530,6 @@ async def get_server_ip():
     except Exception as e:
         # 如果获取失败，返回本地回环地址
         return {"ip": "127.0.0.1"}
-
-# 文件压缩相关路由
-@app.post("/compress")
-async def compress_file(
-    file: UploadFile = File(...),
-    algorithm: str = Form(...),
-    current_user: models.User = Depends(auth.get_current_user),
-    db: Session = Depends(database.get_db)
-):
-    # 生成任务ID
-    task_id = str(uuid.uuid4())
-    
-    try:
-        # 保存上传的文件
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-
-        # 获取文件大小
-        original_size = os.path.getsize(file_path)
-        
-        # 选择压缩算法
-        if algorithm == "lz77":
-            compressor = LZ77Compressor()
-        elif algorithm == "huffman":
-            compressor = HuffmanCompressor()
-        elif algorithm == "zip":
-            compressor = ZipCompressor()
-        else:
-            raise HTTPException(status_code=400, detail="不支持的压缩算法")
-
-        # 设置压缩输出路径
-        compressed_path = os.path.join(COMPRESSED_DIR, f"{file.filename}.{algorithm}")
-        
-        # 执行压缩
-        await compressor.compress(file_path, compressed_path)
-        
-        # 获取压缩后文件大小
-        compressed_size = os.path.getsize(compressed_path)
-        
-        # 创建文件记录
-        db_file = crud.create_file(
-            db=db,
-            filename=file.filename,
-            original_size=original_size,
-            compressed_size=compressed_size,
-            algorithm=algorithm,
-            owner_id=current_user.id
-        )
-
-        return {
-            "task_id": task_id,
-            "file_id": db_file.id,
-            "message": "文件压缩成功",
-            "compression_ratio": db_file.compression_ratio
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 # 文件分享相关路由
 @app.post("/share/{file_id}", response_model=schemas.FileShare)
