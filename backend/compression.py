@@ -10,25 +10,44 @@ import tempfile
 import shutil
 import asyncio
 import subprocess
+from typing import Callable
 
 
-class LZ77Compressor:
+class BaseCompressor:
+    def __init__(self):
+        self._progress_callback = None
+        self._start_time = None
+
+    def set_progress_callback(self, callback: Callable):
+        self._progress_callback = callback
+
+    async def _report_progress(self, progress: float, current_size: int, original_size: int):
+        if self._progress_callback:
+            elapsed_time = time.time() - self._start_time
+            speed = current_size / elapsed_time if elapsed_time > 0 else 0
+            await self._progress_callback({
+                'type': 'progress',
+                'progress': round(progress * 100, 2),
+                'details': {
+                    'original_size': original_size,
+                    'current_size': current_size,
+                    'speed': round(speed, 2),
+                    'time_elapsed': round(elapsed_time, 2)
+                }
+            })
+
+class LZ77Compressor(BaseCompressor):
     def __init__(self, window_size=4096, look_ahead_size=18):
+        super().__init__()
         self.window_size = window_size
         self.look_ahead_size = look_ahead_size
-        self.progress_callback = None
-        self.start_time = 0
-        self.original_size = 0
 
-    def set_progress_callback(self, callback):
-        self.progress_callback = callback
-
-    async def compress(self, input_path, output_path):
-        self.start_time = time.time()
+    async def compress(self, input_path: str, output_path: str):
+        self._start_time = time.time()
+        original_size = os.path.getsize(input_path)
 
         with open(input_path, 'rb') as file:
             data = file.read()
-            self.original_size = len(data)
 
         compressed_data = []
         current_pos = 0
@@ -63,21 +82,11 @@ class LZ77Compressor:
                 compressed_data.append((0, data[current_pos], 0))
                 current_pos += 1
 
-            # 更新进度
-            if self.progress_callback:
-                progress = int((current_pos / total_positions) * 100)
+            # 每处理1%的数据就更新一次进度
+            if current_pos % (total_positions // 100) == 0 or current_pos == total_positions:
+                progress = current_pos / total_positions
                 current_size = len(compressed_data) * 5  # 估算压缩后大小
-                compression_ratio = (1 - current_size / self.original_size) * 100
-                time_elapsed = time.time() - self.start_time
-
-                await self.progress_callback({
-                    'type': 'progress',
-                    'progress': progress,
-                    'originalSize': self.original_size,
-                    'compressedSize': current_size,
-                    'compressionRatio': compression_ratio,
-                    'timeElapsed': time_elapsed
-                })
+                await self._report_progress(progress, current_size, original_size)
 
         # 将压缩数据写入文件
         with open(output_path, 'wb') as file:
@@ -87,22 +96,11 @@ class LZ77Compressor:
                 else:
                     file.write(struct.pack('>BB', 0, offset))
 
-        # 发送完成通知
-        if self.progress_callback:
-            final_size = os.path.getsize(output_path)
-            compression_ratio = (1 - final_size / self.original_size) * 100
-            time_elapsed = time.time() - self.start_time
+        # 报告完成
+        final_size = os.path.getsize(output_path)
+        await self._report_progress(1.0, final_size, original_size)
 
-            await self.progress_callback({
-                'type': 'complete',
-                'filename': os.path.basename(output_path),
-                'originalSize': self.original_size,
-                'compressedSize': final_size,
-                'compressionRatio': compression_ratio,
-                'timeElapsed': time_elapsed
-            })
-
-    def decompress(self, input_path, output_path):
+    async def decompress(self, input_path: str, output_path: str):
         with open(input_path, 'rb') as file:
             data = file.read()
 
@@ -124,17 +122,12 @@ class LZ77Compressor:
             file.write(bytes(decompressed_data))
 
 
-class HuffmanCompressor:
+class HuffmanCompressor(BaseCompressor):
     def __init__(self):
+        super().__init__()
         self.frequency = defaultdict(int)
         self.huffman_codes = {}
         self.reverse_mapping = {}
-        self.progress_callback = None
-        self.start_time = 0
-        self.original_size = 0
-
-    def set_progress_callback(self, callback):
-        self.progress_callback = callback
 
     def make_frequency_dict(self, text):
         for symbol in text:
@@ -161,18 +154,21 @@ class HuffmanCompressor:
         self.huffman_codes = dict(current_code)
         self.reverse_mapping = {v: k for k, v in self.huffman_codes.items()}
 
-    async def compress(self, input_path, output_path):
-        self.start_time = time.time()
+    async def compress(self, input_path: str, output_path: str):
+        self._start_time = time.time()
+        original_size = os.path.getsize(input_path)
 
         with open(input_path, 'rb') as file:
             text = file.read()
-            self.original_size = len(text)
 
+        # 第一阶段：构建Huffman树（10%进度）
         self.make_frequency_dict(text)
         heap = self.make_heap()
         self.merge_nodes(heap)
         self.make_codes(heap)
+        await self._report_progress(0.1, 0, original_size)
 
+        # 第二阶段：编码数据（40%进度）
         encoded_text = ""
         total_symbols = len(text)
         processed_symbols = 0
@@ -181,79 +177,48 @@ class HuffmanCompressor:
             encoded_text += self.huffman_codes[symbol]
             processed_symbols += 1
 
-            # 更新进度
-            if self.progress_callback and processed_symbols % 1000 == 0:
-                progress = int((processed_symbols / total_symbols) * 50)  # 编码阶段占50%
-                current_size = len(encoded_text) // 8  # 估算压缩后大小
-                compression_ratio = (1 - current_size / self.original_size) * 100
-                time_elapsed = time.time() - self.start_time
-
-                await self.progress_callback({
-                    'type': 'progress',
-                    'progress': progress,
-                    'originalSize': self.original_size,
-                    'compressedSize': current_size,
-                    'compressionRatio': compression_ratio,
-                    'timeElapsed': time_elapsed
-                })
+            # 每处理1%的数据就更新一次进度
+            if processed_symbols % (total_symbols // 100) == 0:
+                progress = 0.1 + (processed_symbols / total_symbols * 0.4)  # 10%-50%的进度
+                current_size = len(encoded_text) // 8
+                await self._report_progress(progress, current_size, original_size)
 
         # 填充编码后的文本
         padding_length = 8 - (len(encoded_text) % 8)
         encoded_text += '0' * padding_length
 
-        # 将编码后的文本转换为字节
+        # 第三阶段：转换为字节并写入文件（50%进度）
         b = bytearray()
         total_bytes = len(encoded_text) // 8
         processed_bytes = 0
+
+        # 保存频率表和填充长度
+        header = struct.pack('>I', len(self.frequency))
+        for symbol, freq in self.frequency.items():
+            header += struct.pack('>BI', symbol, freq)
+        header += struct.pack('>B', padding_length)
+        b.extend(header)
 
         for i in range(0, len(encoded_text), 8):
             byte = encoded_text[i:i + 8]
             b.append(int(byte, 2))
             processed_bytes += 1
 
-            # 更新进度
-            if self.progress_callback and processed_bytes % 1000 == 0:
-                progress = 50 + int((processed_bytes / total_bytes) * 50)  # 字节转换阶段占50%
+            if processed_bytes % (total_bytes // 50) == 0:
+                progress = 0.5 + (processed_bytes / total_bytes * 0.5)  # 50%-100%的进度
                 current_size = len(b)
-                compression_ratio = (1 - current_size / self.original_size) * 100
-                time_elapsed = time.time() - self.start_time
+                await self._report_progress(progress, current_size, original_size)
+                await asyncio.sleep(0.01)
 
-                await self.progress_callback({
-                    'type': 'progress',
-                    'progress': progress,
-                    'originalSize': self.original_size,
-                    'compressedSize': current_size,
-                    'compressionRatio': compression_ratio,
-                    'timeElapsed': time_elapsed
-                })
-
-        # 保存压缩数据
+        # 写入文件
         with open(output_path, 'wb') as file:
-            # 保存频率表
-            file.write(struct.pack('>I', len(self.frequency)))
-            for symbol, freq in self.frequency.items():
-                file.write(struct.pack('>BI', symbol, freq))
-            # 保存填充长度
-            file.write(struct.pack('>B', padding_length))
-            # 保存压缩后的数据
             file.write(bytes(b))
 
-        # 发送完成通知
-        if self.progress_callback:
-            final_size = os.path.getsize(output_path)
-            compression_ratio = (1 - final_size / self.original_size) * 100
-            time_elapsed = time.time() - self.start_time
+        # 报告完成
+        final_size = os.path.getsize(output_path)
+        await self._report_progress(1.0, final_size, original_size)
 
-            await self.progress_callback({
-                'type': 'complete',
-                'filename': os.path.basename(output_path),
-                'originalSize': self.original_size,
-                'compressedSize': final_size,
-                'compressionRatio': compression_ratio,
-                'timeElapsed': time_elapsed
-            })
-
-    def decompress(self, input_path, output_path):
+    async def decompress(self, input_path: str, output_path: str):
         with open(input_path, 'rb') as file:
             # 读取频率表
             freq_size = struct.unpack('>I', file.read(4))[0]
@@ -294,56 +259,46 @@ class HuffmanCompressor:
                 file.write(bytes(decompressed_data))
 
 
-class ZipCompressor:
-    def __init__(self):
-        self.progress_callback = None
-        self.start_time = 0
-        self.original_size = 0
 
-    def set_progress_callback(self, callback):
-        self.progress_callback = callback
 
-    async def compress(self, input_path, output_path):
-        self.start_time = time.time()
-        self.original_size = os.path.getsize(input_path)
 
-        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # 添加文件到zip
-            zipf.write(input_path, os.path.basename(input_path))
+class ZipCompressor(BaseCompressor):
+    async def compress(self, input_path: str, output_path: str):
+        self._start_time = time.time()
+        original_size = os.path.getsize(input_path)
+        
+        try:
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # 获取输入文件的基本名称
+                base_name = os.path.basename(input_path)
+                
+                # 写入文件并报告进度
+                bytes_written = 0
+                chunk_size = 8192  # 8KB chunks
+                
+                with open(input_path, 'rb') as f:
+                    data = f.read()
+                    total_size = len(data)
+                    
+                    # 将数据写入zip文件
+                    zf.writestr(base_name, data)
+                    
+                    # 模拟进度更新
+                    for i in range(0, 101, 2):  # 每2%更新一次
+                        bytes_written = int((i / 100) * total_size)
+                        progress = i / 100
+                        await self._report_progress(progress, bytes_written, original_size)
+                
+                # 报告完成
+                await self._report_progress(1.0, total_size, original_size)
+                
+        except Exception as e:
+            print(f"压缩过程中出错: {str(e)}")
+            raise
 
-            # 模拟进度更新
-            for i in range(101):
-                if self.progress_callback:
-                    current_size = os.path.getsize(output_path)
-                    compression_ratio = (1 - current_size / self.original_size) * 100
-                    time_elapsed = time.time() - self.start_time
-
-                    await self.progress_callback({
-                        'type': 'progress',
-                        'progress': i,
-                        'originalSize': self.original_size,
-                        'compressedSize': current_size,
-                        'compressionRatio': compression_ratio,
-                        'timeElapsed': time_elapsed
-                    })
-
-        if self.progress_callback:
-            final_size = os.path.getsize(output_path)
-            compression_ratio = (1 - final_size / self.original_size) * 100
-            time_elapsed = time.time() - self.start_time
-
-            await self.progress_callback({
-                'type': 'complete',
-                'filename': os.path.basename(output_path),
-                'originalSize': self.original_size,
-                'compressedSize': final_size,
-                'compressionRatio': compression_ratio,
-                'timeElapsed': time_elapsed
-            })
-
-    def decompress(self, input_path, output_path):
-        with zipfile.ZipFile(input_path, 'r') as zipf:
-            zipf.extractall(os.path.dirname(output_path))
+    async def decompress(self, input_path: str, output_path: str):
+        with zipfile.ZipFile(input_path, 'r') as zf:
+            zf.extractall(path=os.path.dirname(output_path))
 
 
 class SevenZipCompressor:

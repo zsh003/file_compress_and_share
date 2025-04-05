@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Alert, Progress, Card, Row, Col, Statistic } from 'antd';
 import { Line } from '@ant-design/plots';
 import { formatFileSize } from '../utils/fileUtils';
@@ -15,6 +15,22 @@ export const CompressionProgress = ({
   progressData,
   compressionSpeedData
 }) => {
+  const [displayedProgressData, setDisplayedProgressData] = useState([]);
+  const [displayedSpeedData, setDisplayedSpeedData] = useState([]);
+  const WINDOW_SIZE = 100; // 显示最近100个数据点
+
+  useEffect(() => {
+    if (compressionProgress === 100) {
+      // 压缩完成时显示所有数据
+      setDisplayedProgressData(progressData);
+      setDisplayedSpeedData(compressionSpeedData);
+    } else {
+      // 压缩过程中只显示最近的数据点
+      setDisplayedProgressData(progressData.slice(-WINDOW_SIZE));
+      setDisplayedSpeedData(compressionSpeedData.slice(-WINDOW_SIZE));
+    }
+  }, [progressData, compressionSpeedData, compressionProgress]);
+
   if (!isCompressing) return null;
 
   const getAlertType = () => {
@@ -108,10 +124,10 @@ export const CompressionProgress = ({
         </Row>
       </Card>
 
-      {progressData.length > 0 && (
+      {displayedProgressData.length > 0 && (
         <Card title="压缩进度图表" style={{ marginTop: 16 }}>
           <Line
-            data={progressData}
+            data={displayedProgressData}
             xField="time"
             yField="progress"
             xAxis={{
@@ -126,10 +142,10 @@ export const CompressionProgress = ({
         </Card>
       )}
 
-      {compressionSpeedData.length > 0 && (
+      {displayedSpeedData.length > 0 && (
         <Card title="压缩速度图表" style={{ marginTop: 16 }}>
           <Line
-            data={compressionSpeedData}
+            data={displayedSpeedData}
             xField="time"
             yField="speed"
             xAxis={{

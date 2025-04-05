@@ -124,12 +124,16 @@ export const FileCompressor = () => {
         } else if (data.type === 'complete') {
           handleCompressionComplete(data);
         } else if (data.type === 'error') {
-          message.error(data.message || '压缩过程中出现错误');
+          message.error(data.error || '压缩过程中出现错误');
           setIsCompressing(false);
           setCompressionDetails(prev => ({
             ...prev,
             wsConnected: false
           }));
+          if (wsRef.current) {
+            wsRef.current.close();
+            wsRef.current = null;
+          }
         }
       };
 
@@ -141,6 +145,10 @@ export const FileCompressor = () => {
           ...prev,
           wsConnected: false
         }));
+        if (wsRef.current) {
+          wsRef.current.close();
+          wsRef.current = null;
+        }
       };
 
       ws.onclose = (event) => {
@@ -155,52 +163,57 @@ export const FileCompressor = () => {
         }
       };
 
+      wsRef.current = ws;
       return false; // 阻止默认上传行为
+
     } catch (error) {
       console.error('上传或连接出错:', error);
       message.error(error.message || '文件上传失败');
       setIsCompressing(false);
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
       return false;
     }
   };
 
   const handleCompressionComplete = (data) => {
+    console.log('压缩完成:', data);
     setIsCompressing(false);
-    setFiles(prev => [{
-      name: data.original_name,
-      compressedName: data.compressed_name,
-      size: data.original_size,
-      algorithm: algorithm,
-      compressed: true,
-      compressionDetails: {
-        originalSize: data.original_size,
-        compressedSize: data.compressed_size,
-        compressionRatio: data.compression_ratio,
-        timeElapsed: data.time_elapsed
-      }
-    }, ...prev]);
-    message.success('文件压缩完成');
+    setCompressionProgress(100);
+    setCompressionDetails(prev => ({
+      ...prev,
+      wsConnected: false
+    }));
+    
+    // 关闭WebSocket连接
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    
+    // 显示成功消息
+    message.success('文件压缩完成！');
+    
+    // 重置状态
+    setCompressionTaskId(null);
+    setCompressionStartTime(null);
+    setProgressData([]);
+    setCompressionSpeedData([]);
   };
 
-  const handleStopCompression = async () => {
-    if (!compressionTaskId) return;
-
-    setIsStopping(true);
-    try {
-      await axiosInstance.post(`/stop_compression/${compressionTaskId}`);
-      message.success('已停止压缩');
-    } catch (error) {
-      message.error('停止压缩失败');
-    } finally {
-      setIsStopping(false);
-      setIsCompressing(false);
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+  const handleStopCompression = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
     }
+    setIsCompressing(false);
+    setCompressionDetails(prev => ({
+      ...prev,
+      wsConnected: false
+    }));
+    message.info('已停止压缩');
   };
 
   const handleDownload = async (fileName) => {
