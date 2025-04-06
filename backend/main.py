@@ -636,18 +636,23 @@ async def share_file(
         server_ip = await get_server_ip()
         share_url = f"http://{server_ip['ip']}:8000/shared/{share_id}/download"
         
-        return {
+        response_data = {
             "id": db_share.id,
             "share_id": share_id,
             "file_id": file_id,
             "password": password,
+            "share_url": share_url,
             "created_at": db_share.created_at,
             "expires_at": db_share.expires_at,
             "max_downloads": db_share.max_downloads,
             "current_downloads": db_share.current_downloads,
-            "is_password_protected": db_share.is_password_protected,
-            "share_url": share_url
+            "is_password_protected": db_share.is_password_protected
         }
+        
+        print("准备返回的数据:", response_data)
+        print("share_url的值:", share_url)
+        
+        return response_data
     except Exception as e:
         print(f"分享错误: {str(e)}")
         # 如果出错，清理已创建的分享目录

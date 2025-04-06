@@ -54,6 +54,7 @@ class FileShare(FileShareBase):
     share_id: str
     file_id: int
     password: Optional[str]
+    share_url: str
     created_at: datetime
     expires_at: datetime
     current_downloads: int

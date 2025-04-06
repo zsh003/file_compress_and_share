@@ -51,7 +51,7 @@ class BaseCompressor:
             })
 
 class LZ77Compressor(BaseCompressor):
-    def __init__(self, window_size=4096, look_ahead_size=18):
+    def __init__(self, window_size=4096, look_ahead_size=128):
         super().__init__()
         self.window_size = window_size
         self.look_ahead_size = look_ahead_size
@@ -72,43 +72,54 @@ class LZ77Compressor(BaseCompressor):
             match_length = 0
             match_offset = 0
 
-            # 在滑动窗口中查找匹配
-            for offset in range(1, min(self.window_size + 1, current_pos + 1)):
-                if current_pos + offset > len(data):
-                    break
+            start = max(0, current_pos - self.window_size)
+            window = data[start:current_pos]
+            lookahead = data[current_pos:current_pos + self.look_ahead_size]
 
-                length = 0
-                while (current_pos + length < len(data) and
-                       current_pos - offset + length < current_pos and
-                       data[current_pos + length] == data[current_pos - offset + length] and
-                       length < self.look_ahead_size):
-                    length += 1
+            # 最大长度匹配
+            for l in range(len(lookahead), 0, -1):
+                match_string = data[current_pos:current_pos + l]
 
-                if length > match_length:
-                    match_length = length
-                    match_offset = offset
+                try:
+                    of = window.rindex(match_string)
+                except ValueError:
+                    continue
 
-            # 写入压缩数据
-            if match_length > 2:
-                compressed_data.append((1, match_offset, match_length))
-                current_pos += match_length
+                match_length = l  # 实际length
+                match_offset = current_pos - start - of  # 实际offset
+                break
+
+            if match_length > 0:
+                if current_pos + match_length < len(data):
+                    compressed_data.append((match_offset, match_length, data[current_pos + match_length]))
+                else:
+                    compressed_data.append((match_offset, match_length))
+                current_pos += match_length + 1
             else:
-                compressed_data.append((0, data[current_pos], 0))
+                compressed_data.append((0, 0, data[current_pos]))
                 current_pos += 1
 
             # 每处理1%的数据就更新一次进度
             if current_pos % (total_positions // 100) == 0 or current_pos == total_positions:
                 progress = current_pos / total_positions
-                current_size = len(compressed_data) * 5  # 估算压缩后大小
+                current_size = len(compressed_data) * 4  # 估算压缩后大小
                 await self._report_progress(progress, current_size, original_size)
 
         # 将压缩数据写入文件
+        result = bytearray()
+        for item in compressed_data:
+            if len(item) == 3:
+                offset, length, next_char = item
+                result.extend(offset.to_bytes(2, 'big'))
+                result.append(length)
+                result.append(next_char)
+            else:
+                offset, length = item
+                result.append(0xFF)  # 特殊标记
+                result.extend(offset.to_bytes(2, 'big'))
+                result.append(length)
         with open(output_path, 'wb') as file:
-            for flag, offset, length in compressed_data:
-                if flag == 1:
-                    file.write(struct.pack('>BHH', 1, offset, length))
-                else:
-                    file.write(struct.pack('>BB', 0, offset))
+            file.write(result)
 
         # 报告完成
         final_size = os.path.getsize(output_path)
@@ -118,22 +129,37 @@ class LZ77Compressor(BaseCompressor):
         with open(input_path, 'rb') as file:
             data = file.read()
 
-        decompressed_data = []
-        current_pos = 0
-
-        while current_pos < len(data):
-            flag = data[current_pos]
-            if flag == 1:
-                offset, length = struct.unpack('>HH', data[current_pos + 1:current_pos + 5])
-                for i in range(length):
-                    decompressed_data.append(decompressed_data[-offset + i])
-                current_pos += 5
+        decompressed_data = bytearray()
+        i = 0
+        while i < len(data):
+            if data[i] != 0xFF:
+                # print("No 0xFF")
+                offset = int.from_bytes(data[i:i + 2], "big")
+                length = data[i + 2]
+                # print(f"offset={offset}, length={length}, len={len(result)}")
+                # print(result)
+                # 复制匹配内容
+                if offset != 0 and length != 0:
+                    start = len(decompressed_data) - offset
+                    for j in range(length):
+                        decompressed_data.append(decompressed_data[start + j])
+                next_char = data[i + 3]
+                decompressed_data.append(next_char)
+                i += 4
             else:
-                decompressed_data.append(data[current_pos + 1])
-                current_pos += 2
+                # print("0xFF")
+                offset = int.from_bytes(data[i + 1:i + 3], "big")
+                length = data[i + 3]
+                # print(f"offset={offset}, length={length}, len={len(result)}")
+                # print(result)
+                # 复制匹配内容
+                start = len(decompressed_data) - offset
+                for j in range(length):
+                    decompressed_data.append(decompressed_data[start + j])
+                i += 4
 
         with open(output_path, 'wb') as file:
-            file.write(bytes(decompressed_data))
+            file.write(decompressed_data)
 
 
 class HuffmanCompressor(BaseCompressor):
@@ -196,7 +222,6 @@ class HuffmanCompressor(BaseCompressor):
                 progress = 0.1 + (processed_symbols / total_symbols * 0.4)  # 10%-50%的进度
                 current_size = len(encoded_text) // 8
                 await self._report_progress(progress, current_size, original_size)
-                await asyncio.sleep(0.001)
 
         # 填充编码后的文本
         padding_length = 8 - (len(encoded_text) % 8)
@@ -315,7 +340,59 @@ class ZipCompressor(BaseCompressor):
         with zipfile.ZipFile(input_path, 'r') as zf:
             zf.extractall(path=os.path.dirname(output_path))
 
+class CombinedCompressor:
+    def __init__(self):
+        self.lz77_compressor = LZ77Compressor()
+        self.huffman_compressor = HuffmanCompressor()
+        self.progress_callback = None
 
+    def set_progress_callback(self, callback):
+        self.progress_callback = callback
+        self.lz77_compressor.set_progress_callback(callback)
+        self.huffman_compressor.set_progress_callback(callback)
+
+    async def compress(self, input_path, output_path):
+        # 创建临时文件路径
+        temp_path = f"{output_path}.temp"
+        
+        try:
+            # 第一步：LZ77压缩
+            await self.lz77_compressor.compress(input_path, temp_path)
+            
+            # 第二步：Huffman压缩
+            await self.huffman_compressor.compress(temp_path, output_path)
+            
+            # 删除临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+        except Exception as e:
+            # 确保清理临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
+
+    async def decompress(self, input_path, output_path):
+        # 创建临时文件路径
+        temp_path = f"{output_path}.temp"
+        
+        try:
+            # 第一步：Huffman解压
+            await self.huffman_compressor.decompress(input_path, temp_path)
+            
+            # 第二步：LZ77解压
+            await self.lz77_compressor.decompress(temp_path, output_path)
+            
+            # 删除临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+        except Exception as e:
+            # 确保清理临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e 
+        
 class SevenZipCompressor:
     def __init__(self):
         self.progress_callback = None
@@ -373,56 +450,3 @@ class SevenZipCompressor:
     def decompress(self, input_path, output_path):
         with py7zr.SevenZipFile(input_path, 'r') as sz:
             sz.extractall(os.path.dirname(output_path)) 
-
-class CombinedCompressor:
-    def __init__(self):
-        self.lz77_compressor = LZ77Compressor()
-        self.huffman_compressor = HuffmanCompressor()
-        self.progress_callback = None
-
-    def set_progress_callback(self, callback):
-        self.progress_callback = callback
-        self.lz77_compressor.set_progress_callback(callback)
-        self.huffman_compressor.set_progress_callback(callback)
-
-    async def compress(self, input_path, output_path):
-        # 创建临时文件路径
-        temp_path = f"{output_path}.temp"
-        
-        try:
-            # 第一步：LZ77压缩
-            await self.lz77_compressor.compress(input_path, temp_path)
-            
-            # 第二步：Huffman压缩
-            await self.huffman_compressor.compress(temp_path, output_path)
-            
-            # 删除临时文件
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
-        except Exception as e:
-            # 确保清理临时文件
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise e
-
-    async def decompress(self, input_path, output_path):
-        # 创建临时文件路径
-        temp_path = f"{output_path}.temp"
-        
-        try:
-            # 第一步：Huffman解压
-            await self.huffman_compressor.decompress(input_path, temp_path)
-            
-            # 第二步：LZ77解压
-            await self.lz77_compressor.decompress(temp_path, output_path)
-            
-            # 删除临时文件
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
-        except Exception as e:
-            # 确保清理临时文件
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise e 
