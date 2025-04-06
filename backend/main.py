@@ -676,31 +676,37 @@ async def download_shared_file(
             raise HTTPException(status_code=400, detail="分享链接已过期或达到下载次数限制")
 
         # 验证密码
-        if share.is_password_protected and share.password != password:
-            raise HTTPException(status_code=403, detail="密码错误")
+        if share.is_password_protected:
+            if not password:
+                raise HTTPException(status_code=401, detail="请提供密码")
+            if share.password != password:
+                raise HTTPException(status_code=401, detail="密码错误")
 
         # 获取文件
         db_file = crud.get_file(db, share.file_id)
         if not db_file:
             raise HTTPException(status_code=404, detail="文件不存在")
 
-        # 更新下载次数
-        crud.update_share_download_count(db, share_id)
-
         # 构建文件路径
-        file_path = os.path.join(COMPRESSED_DIR, f"{db_file.filename}")
+        file_path = os.path.join(COMPRESSED_DIR, f"{db_file.filename}.compressed")
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="文件不存在")
+
+        # 更新下载次数
+        crud.update_share_download_count(db, share_id)
 
         # 返回文件
         return FileResponse(
             file_path,
-            filename=db_file.filename,
-            media_type="application/octet-stream"
+            filename=f"{db_file.filename}.compressed",
+            media_type='application/octet-stream'
         )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"下载分享文件错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"下载错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
 
 # 用户文件列表
 @app.get("/files", response_model=List[schemas.File])

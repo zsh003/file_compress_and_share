@@ -1,41 +1,26 @@
 import React, { useState } from 'react';
-import { Modal, Form, Input, Button, message, Space, Switch, Typography, Alert } from 'antd';
+import { Modal, Form, Input, Button, message, Space, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import axiosInstance from '../utils/axios';
 
 const { Text } = Typography;
 
-export const ShareModal = ({ visible, onClose, file, token, onShareSuccess }) => {
+export const ShareModal = ({ visible, onClose, file }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [isPasswordProtected, setIsPasswordProtected] = useState(true);
   const [shareInfo, setShareInfo] = useState(null);
 
   const handleShare = async (values) => {
     setLoading(true);
     try {
-      const response = await axiosInstance.post(
-        `/share/${file.id}`,
-        {
-          is_password_protected: isPasswordProtected,
-          expiration_hours: values.expirationHours || 24,
-          max_downloads: values.maxDownloads || -1
-        }
-      );
+      const response = await axiosInstance.post(`/share/${file.id}`, {
+        is_password_protected: true,
+        password: values.password,
+        expiration_hours: values.expirationHours || 24,
+        max_downloads: values.maxDownloads || 1
+      });
 
-      console.log('分享响应:', response.data);
-
-      const newShareInfo = {
-        shareLink: response.data.share_url,
-        password: response.data.password,
-        expiresAt: response.data.expires_at,
-        maxDownloads: response.data.max_downloads
-      };
-
-      console.log('分享信息:', newShareInfo);
-
-      setShareInfo(newShareInfo);
-      onShareSuccess(newShareInfo);
+      setShareInfo(response.data);
       message.success('文件分享成功');
     } catch (error) {
       console.error('分享错误:', error);
@@ -70,20 +55,19 @@ export const ShareModal = ({ visible, onClose, file, token, onShareSuccess }) =>
           onFinish={handleShare}
           initialValues={{
             expirationHours: 24,
-            maxDownloads: -1
+            maxDownloads: 1
           }}
         >
           <Form.Item label="文件名">
-            <Input value={file.originalName} disabled />
+            <Input value={file.filename} disabled />
           </Form.Item>
 
-          <Form.Item label="密码保护">
-            <Switch
-              checked={isPasswordProtected}
-              onChange={setIsPasswordProtected}
-              checkedChildren="开启"
-              unCheckedChildren="关闭"
-            />
+          <Form.Item
+            name="password"
+            label="分享密码"
+            rules={[{ required: true, message: '请输入密码生成种子' }]}
+          >
+            <Input.Password placeholder="请输入密码生成种子" />
           </Form.Item>
 
           <Form.Item
@@ -100,71 +84,51 @@ export const ShareModal = ({ visible, onClose, file, token, onShareSuccess }) =>
           <Form.Item
             name="maxDownloads"
             label="最大下载次数"
-            tooltip="设置为-1表示不限制下载次数"
             rules={[
               { required: true, message: '请输入最大下载次数' },
-              { type: 'number', min: -1, message: '下载次数必须大于等于-1' }
+              { type: 'number', min: 1, message: '下载次数必须大于等于1' }
             ]}
           >
-            <Input type="number" placeholder="默认不限制" />
+            <Input type="number" placeholder="默认1次" />
           </Form.Item>
 
           <Form.Item>
-            <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-              <Button onClick={onClose}>取消</Button>
-              <Button type="primary" htmlType="submit" loading={loading}>
-                生成分享链接
-              </Button>
-            </Space>
+            <Button type="primary" htmlType="submit" loading={loading} block>
+              生成分享链接
+            </Button>
           </Form.Item>
         </Form>
       ) : (
         <div>
-          <Alert
-            message="分享链接已生成"
-            description={
-              <div>
-                <div style={{ marginBottom: 16 }}>
-                  <Text strong>分享链接：</Text>
-                  <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
-                    <Text copyable>{shareInfo.shareLink}</Text>
-                    <Button
-                      type="text"
-                      icon={<CopyOutlined />}
-                      onClick={() => handleCopy(shareInfo.shareLink)}
-                    />
-                  </div>
-                </div>
-                {shareInfo.password && (
-                  <div>
-                    <Text strong>分享密码：</Text>
-                    <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
-                      <Text copyable>{shareInfo.password}</Text>
-                      <Button
-                        type="text"
-                        icon={<CopyOutlined />}
-                        onClick={() => handleCopy(shareInfo.password)}
-                      />
-                    </div>
-                  </div>
-                )}
-                <div style={{ marginTop: 16 }}>
-                  <Text type="secondary">
-                    有效期至：{new Date(shareInfo.expiresAt).toLocaleString()}
-                  </Text>
-                </div>
-                <div>
-                  <Text type="secondary">
-                    最大下载次数：{shareInfo.maxDownloads === -1 ? '不限制' : shareInfo.maxDownloads}
-                  </Text>
-                </div>
-              </div>
-            }
-            type="success"
-            showIcon
-          />
-          <div style={{ marginTop: 16, textAlign: 'right' }}>
-            <Button onClick={onClose}>关闭</Button>
+          <div style={{ marginBottom: 16 }}>
+            <Text strong>分享链接：</Text>
+            <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
+              <Text style={{ flex: 1, wordBreak: 'break-all' }}>
+                {shareInfo.share_url}?password={shareInfo.password}
+              </Text>
+              <Button
+                type="text"
+                icon={<CopyOutlined />}
+                onClick={() => handleCopy(`${shareInfo.share_url}?password=${shareInfo.password}`)}
+              >
+                复制
+              </Button>
+            </div>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <Text type="secondary">
+              有效期至：{new Date(shareInfo.expires_at).toLocaleString()}
+            </Text>
+          </div>
+          <div>
+            <Text type="secondary">
+              最大下载次数：{shareInfo.max_downloads} 次
+            </Text>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <Button type="primary" onClick={onClose} block>
+              关闭
+            </Button>
           </div>
         </div>
       )}
