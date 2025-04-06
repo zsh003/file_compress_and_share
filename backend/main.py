@@ -649,8 +649,6 @@ async def share_file(
             "is_password_protected": db_share.is_password_protected
         }
         
-        print("准备返回的数据:", response_data)
-        print("share_url的值:", share_url)
         
         return response_data
     except Exception as e:
