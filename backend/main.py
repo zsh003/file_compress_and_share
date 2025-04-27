@@ -718,3 +718,61 @@ async def get_user_files(
 ):
     files = crud.get_user_files(db, current_user.id, skip=skip, limit=limit)
     return files
+
+# 用户分享列表
+@app.get("/shares", response_model=List[schemas.FileShare])
+async def get_user_shares(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    shares = crud.get_user_shares(db, current_user.id, skip=skip, limit=limit)
+    
+    # 为每个分享添加文件名和分享链接
+    result = []
+    for share in shares:
+        file = crud.get_file(db, share.file_id)
+        server_ip = await get_server_ip()
+        share_url = f"http://{server_ip['ip']}:8000/shared/{share.share_id}/download"
+        
+        share_dict = {
+            "id": share.id,
+            "share_id": share.share_id,
+            "file_id": share.file_id,
+            "password": share.password,
+            "created_at": share.created_at,
+            "expires_at": share.expires_at,
+            "max_downloads": share.max_downloads,
+            "current_downloads": share.current_downloads,
+            "is_password_protected": share.is_password_protected,
+            "share_url": share_url,
+            "file_name": file.filename if file else "未知文件",
+            "expiration_hours": 24,  # 默认值
+        }
+        result.append(share_dict)
+    
+    return result
+
+# 删除分享
+@app.delete("/shares/{share_id}")
+async def delete_user_share(
+    share_id: int,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    success = crud.delete_share(db, share_id, current_user.id)
+    if not success:
+        raise HTTPException(status_code=404, detail="分享不存在或无权删除")
+    return {"message": "分享已删除"}
+
+# 用户压缩历史记录
+@app.get("/compression-history", response_model=List[schemas.File])
+async def get_compression_history(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(database.get_db)
+):
+    history = crud.get_user_compression_history(db, current_user.id, skip=skip, limit=limit)
+    return history

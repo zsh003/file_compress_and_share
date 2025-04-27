@@ -51,6 +51,13 @@ def init_test_data():
             },
             {
                 "filename": "test3.txt",
+                "original_size": 2048,
+                "compressed_size": 2000,
+                "algorithm": "combined",
+                "owner": created_users["admin"]
+            },
+            {
+                "filename": "test4.txt",
                 "original_size": 4096,
                 "compressed_size": 4092,
                 "algorithm": "huffman",

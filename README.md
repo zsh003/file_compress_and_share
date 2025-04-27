@@ -34,7 +34,7 @@ pip install -r requirements.txt
 3. 运行后端服务器：
 ```bash
 cd backend
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+python start.py
 ```
 
 ### 前端设置

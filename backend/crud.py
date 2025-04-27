@@ -89,6 +89,27 @@ def get_file_share(db: Session, share_id: str):
         .filter(models.FileShare.share_id == share_id)\
         .first()
 
+def get_user_shares(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+    return db.query(models.FileShare)\
+        .join(models.File, models.FileShare.file_id == models.File.id)\
+        .filter(models.File.owner_id == user_id)\
+        .offset(skip)\
+        .limit(limit)\
+        .all()
+
+def delete_share(db: Session, share_id: int, user_id: int):
+    share = db.query(models.FileShare)\
+        .filter(models.FileShare.id == share_id)\
+        .join(models.File, models.FileShare.file_id == models.File.id)\
+        .filter(models.File.owner_id == user_id)\
+        .first()
+        
+    if share:
+        db.delete(share)
+        db.commit()
+        return True
+    return False
+
 def update_share_download_count(db: Session, share_id: str):
     db_share = get_file_share(db, share_id)
     if db_share:
@@ -120,4 +141,13 @@ def check_share_validity(db: Session, share: models.FileShare) -> bool:
     if share.max_downloads != -1 and share.current_downloads >= share.max_downloads:
         return False
     
-    return True 
+    return True
+
+# 压缩历史记录相关操作
+def get_user_compression_history(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+    return db.query(models.File)\
+        .filter(models.File.owner_id == user_id)\
+        .order_by(models.File.created_at.desc())\
+        .offset(skip)\
+        .limit(limit)\
+        .all() 
