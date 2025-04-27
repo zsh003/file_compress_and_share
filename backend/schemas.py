@@ -36,8 +36,6 @@ class File(FileBase):
     compression_ratio: float
     created_at: datetime
     owner_id: int
-    is_encrypted: bool = False
-    encryption_key: Optional[str] = None
 
     class Config:
         from_attributes = True

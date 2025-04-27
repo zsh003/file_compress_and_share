@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { Upload, Button, Radio, Space, Typography, Checkbox, Input, Tooltip } from 'antd';
-import { UploadOutlined, LockOutlined } from '@ant-design/icons';
+import React from 'react';
+import { Upload, Button, Radio, Space, Typography } from 'antd';
+import { UploadOutlined } from '@ant-design/icons';
 import { ALGORITHMS, getAlgorithmDisplayName, getAlgorithmDescription } from '../constants/algorithms';
 
 const { Title } = Typography;
@@ -11,14 +11,8 @@ export const FileUploader = ({
   onFileUpload,
   isCompressing,
   isStopping,
-  onStopCompression,
-  enableEncryption = false,
-  encryptionKey = '',
-  onEnableEncryptionChange,
-  onEncryptionKeyChange
+  onStopCompression
 }) => {
-  const [showEncryptionKey, setShowEncryptionKey] = useState(false);
-
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{ marginBottom: 32 }}>
@@ -35,40 +29,6 @@ export const FileUploader = ({
         </Radio.Group>
         <div style={{ marginTop: 8, color: '#666' }}>
           {getAlgorithmDescription(algorithm)}
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <Title level={4}>加密设置：</Title>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <Checkbox 
-            checked={enableEncryption} 
-            onChange={e => onEnableEncryptionChange(e.target.checked)}
-          >
-            启用AES加密
-          </Checkbox>
-          
-          {enableEncryption && (
-            <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
-              <Input
-                prefix={<LockOutlined />}
-                placeholder="输入加密密钥，为空则自动生成"
-                value={encryptionKey}
-                onChange={e => onEncryptionKeyChange(e.target.value)}
-                type={showEncryptionKey ? "text" : "password"}
-                style={{ width: '300px', marginRight: '8px' }}
-              />
-              <Button 
-                size="small" 
-                onClick={() => setShowEncryptionKey(!showEncryptionKey)}
-              >
-                {showEncryptionKey ? '隐藏' : '显示'}
-              </Button>
-              <Tooltip title="如果不输入密钥，系统将自动生成一个随机密钥。请务必保存好密钥，解压时将需要此密钥。">
-                <Button size="small" type="link">?</Button>
-              </Tooltip>
-            </div>
-          )}
         </div>
       </div>
 

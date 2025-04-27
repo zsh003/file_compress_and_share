@@ -24,8 +24,6 @@ class File(Base):
     compression_ratio = Column(Float)
     algorithm = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    is_encrypted = Column(Boolean, default=False)
-    encryption_key = Column(String, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("User", back_populates="files")
     shares = relationship("FileShare", back_populates="file")
