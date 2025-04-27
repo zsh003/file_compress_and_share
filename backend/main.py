@@ -30,8 +30,10 @@ import crud
 import auth
 import database
 
+
 # 创建数据库表
 models.Base.metadata.create_all(bind=database.engine)
+
 
 app = FastAPI()
 
@@ -253,10 +255,15 @@ async def logout():
 async def upload_file(
     file: UploadFile = File(...),
     algorithm: str = Form("algorithm"),
+    enable_encryption: str = Form("false"),
+    encryption_key: Optional[str] = Form(None),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
     try:
+        # 处理加密选项
+        enable_encryption = enable_encryption.lower() == "true"
+        
         # 生成任务ID
         task_id = str(uuid.uuid4())
         stop_flags[task_id] = False
@@ -274,7 +281,7 @@ async def upload_file(
         # 获取文件大小
         file_size = os.path.getsize(file_path)
 
-        print(f"接收到文件: {file.filename}")
+        print(f"接收到文件: {file.filename}, 启用加密: {enable_encryption}")
 
         # 根据选择的算法进行压缩
         if algorithm == "lz77":
@@ -287,6 +294,17 @@ async def upload_file(
             compressor = CombinedCompressor()
         else:
             raise HTTPException(status_code=400, detail="不支持的压缩算法")
+
+        # 如果不需要加密，设置压缩器不使用加密
+        if not enable_encryption:
+            if hasattr(compressor, 'set_encryption_key'):
+                compressor.set_encryption_key(None)
+                print("禁用加密")
+        # 如果需要加密但没提供密钥，将使用默认生成的密钥
+        elif enable_encryption and encryption_key:
+            if hasattr(compressor, 'set_encryption_key'):
+                compressor.set_encryption_key(encryption_key)
+                print(f"使用用户提供的加密密钥")
 
         # 设置进度回调
         if hasattr(compressor, 'set_progress_callback'):
@@ -382,6 +400,11 @@ async def compress_file(compressor, input_path, output_path, task_id):
         compressed_size = os.path.getsize(output_path)
         compression_ratio = (original_size - compressed_size) / original_size
 
+        # 获取加密密钥（如果有）
+        encryption_key = None
+        if hasattr(compressor, 'get_encryption_key'):
+            encryption_key = compressor.get_encryption_key()
+
         # 保存文件信息到数据库
         db = next(database.get_db())
         try:
@@ -391,14 +414,15 @@ async def compress_file(compressor, input_path, output_path, task_id):
                 compressed_size=compressed_size,
                 compression_ratio=compression_ratio,
                 algorithm=algorithm,
-                owner_id=user_id
+                owner_id=user_id,
+                encryption_key=encryption_key  # 保存加密密钥到数据库
             )
             db.add(file_record)
             db.commit()
             db.refresh(file_record)
 
-            # 发送完成消息
-            await send_compression_progress(active_connections[task_id], {
+            # 发送完成消息，包含文件ID和加密密钥（如果有）
+            completion_message = {
                 "type": "completed",
                 "progress": 100,
                 "details": {
@@ -407,7 +431,13 @@ async def compress_file(compressor, input_path, output_path, task_id):
                     "compression_ratio": compression_ratio,
                     "file_id": file_record.id
                 }
-            })
+            }
+            
+            # 如果有加密密钥，添加到完成消息中
+            if encryption_key:
+                completion_message["details"]["encryption_key"] = encryption_key
+                
+            await send_compression_progress(active_connections[task_id], completion_message)
 
         except Exception as e:
             db.rollback()
@@ -448,6 +478,8 @@ async def compress_file(compressor, input_path, output_path, task_id):
 async def decompress_file(
     file: UploadFile = File(...),
     algorithm: str = Form("algorithm"),
+    encryption_key: Optional[str] = Form(None),  # 可选的加密密钥参数
+    file_id: Optional[int] = Form(None),  # 可选的文件ID参数
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(database.get_db)
 ):
@@ -455,6 +487,14 @@ async def decompress_file(
         # 生成任务ID
         task_id = str(uuid.uuid4())
         stop_flags[task_id] = False
+
+        # 如果提供了文件ID，尝试从数据库获取加密密钥
+        if file_id is not None:
+            db_file = db.query(models.File).filter(models.File.id == file_id).first()
+            if db_file and db_file.encryption_key:
+                # 优先使用数据库中的密钥
+                encryption_key = db_file.encryption_key
+                print(f"使用数据库中的加密密钥: {encryption_key[:5]}...{encryption_key[-5:] if len(encryption_key) > 10 else encryption_key}")
 
         # 保存上传的压缩文件
         if file.filename is not None:
@@ -490,8 +530,12 @@ async def decompress_file(
         # 确保解压目录存在
         os.makedirs(DECOMPRESSED_DIR, exist_ok=True)
 
+        print(encryption_key)
+
         # 在后台任务中执行解压
-        decompression_task = asyncio.create_task(decompress_file_task(compressor, file_path, decompressed_path, task_id))
+        decompression_task = asyncio.create_task(
+            decompress_file_task(compressor, file_path, decompressed_path, task_id, encryption_key)
+        )
         compression_tasks[task_id] = {
             "task": decompression_task,
             "user_id": current_user.id
@@ -506,15 +550,24 @@ async def decompress_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def decompress_file_task(compressor, input_path, output_path, task_id):
+async def decompress_file_task(compressor, input_path, output_path, task_id, encryption_key=None):
     try:
+        # 添加日志记录密钥信息
+        if encryption_key:
+            print(f"尝试使用密钥解密: {encryption_key[:5]}...{encryption_key[-5:] if len(encryption_key) > 10 else encryption_key}")
+        else:
+            print("未提供解密密钥，尝试无密钥解压")
+            
         # 异步解压
         if asyncio.iscoroutinefunction(compressor.decompress):
-            await compressor.decompress(input_path, output_path)
+            await compressor.decompress(input_path, output_path, encryption_key)
         else:
             # 保持向后兼容
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, compressor.decompress, input_path, output_path)
+            await loop.run_in_executor(
+                None, 
+                lambda: compressor.decompress(input_path, output_path, encryption_key)
+            )
 
         # 发送完成消息
         await send_compression_progress(active_connections[task_id], {
@@ -609,7 +662,12 @@ async def share_file(
         share_id = str(uuid.uuid4())
         password = None
         if share_info.is_password_protected:
-            password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(6))
+            # 如果文件有加密密钥，使用相同的密钥作为分享密码，否则生成随机密码
+            file_record = db.query(models.File).filter(models.File.id == file_id).first()
+            if hasattr(file_record, 'encryption_key') and file_record.encryption_key:
+                password = file_record.encryption_key
+            else:
+                password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(6))
 
         # 创建分享目录
         share_dir = os.path.join(SHARED_DIR, share_id)
@@ -640,7 +698,6 @@ async def share_file(
             "id": db_share.id,
             "share_id": share_id,
             "file_id": file_id,
-            "file_name": db_file.filename,
             "password": password,
             "share_url": share_url,
             "created_at": db_share.created_at,

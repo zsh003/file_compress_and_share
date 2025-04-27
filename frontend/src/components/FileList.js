@@ -1,6 +1,6 @@
 import React from 'react';
 import { Table, Button, Space, Tag, Tooltip } from 'antd';
-import { DownloadOutlined, ShareAltOutlined, FileZipOutlined, CopyOutlined } from '@ant-design/icons';
+import { DownloadOutlined, ShareAltOutlined, FileZipOutlined, CopyOutlined, LockOutlined, UnlockOutlined } from '@ant-design/icons';
 import { getAlgorithmDisplayName, getAlgorithmColor } from '../constants/algorithms';
 
 export const FileList = ({ 
@@ -18,7 +18,19 @@ export const FileList = ({
       key: 'originalName',
       render: (text, record) => (
         <div>
-          <div>{text}</div>
+          <div>
+            {text}
+            {record.encryption_key && 
+              <Tooltip title="文件已加密">
+                <LockOutlined style={{ color: '#ff4d4f', marginLeft: 8 }} />
+              </Tooltip>
+            }
+            {record.encryption_key === null && 
+              <Tooltip title="文件未加密">
+                <UnlockOutlined style={{ color: '#52c41a', marginLeft: 8 }} />
+              </Tooltip>
+            }
+          </div>
           <div style={{ fontSize: '12px', color: '#666' }}>
             压缩后: {record.compressedName}
           </div>

@@ -30,12 +30,25 @@ export const FileCompressor = () => {
   const [compressionSpeedData, setCompressionSpeedData] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [enableEncryption, setEnableEncryption] = useState(false);
+  const [encryptionKey, setEncryptionKey] = useState('');
   
   const wsRef = useRef(null);
   const startTimeRef = useRef(null);
 
   const handleAlgorithmChange = (value) => {
     setAlgorithm(value);
+  };
+
+  const handleEnableEncryptionChange = (checked) => {
+    setEnableEncryption(checked);
+    if (!checked) {
+      setEncryptionKey('');
+    }
+  };
+
+  const handleEncryptionKeyChange = (value) => {
+    setEncryptionKey(value);
   };
 
   const handleFileUpload = async (file) => {
@@ -57,6 +70,10 @@ export const FileCompressor = () => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('algorithm', algorithm);
+    formData.append('enable_encryption', enableEncryption.toString());
+    if (enableEncryption && encryptionKey) {
+      formData.append('encryption_key', encryptionKey);
+    }
 
     try {
       // 先建立WebSocket连接
@@ -202,6 +219,17 @@ export const FileCompressor = () => {
     // 显示成功消息
     message.success('文件压缩完成！');
     
+    // 如果有加密密钥，保存到本地存储
+    if (data.details && data.details.encryption_key) {
+      // 将加密密钥与文件ID关联存储
+      const encryptionKeys = JSON.parse(localStorage.getItem('encryptionKeys') || '{}');
+      encryptionKeys[data.details.file_id] = data.details.encryption_key;
+      localStorage.setItem('encryptionKeys', JSON.stringify(encryptionKeys));
+      
+      // 通知用户文件已被加密
+      message.info('文件已使用AES加密，密钥已安全保存。解压时将自动使用。');
+    }
+    
     // 重置状态
     setCompressionTaskId(null);
     setCompressionStartTime(null);
@@ -260,36 +288,76 @@ export const FileCompressor = () => {
   };
 
   const handleDecompress = async (file) => {
-    try {
-      // 创建FormData对象
-      const formData = new FormData();
-      // 获取压缩文件
-      const response = await axiosInstance.get(`/download/${file.compressedName}`, {
-        responseType: 'blob'
-      });
-      
-      // 创建File对象
-      const compressedFile = new File([response.data], file.compressedName, {
-        type: 'application/octet-stream'
-      });
-      
-      // 添加到FormData
-      formData.append('file', compressedFile);
-      formData.append('algorithm', file.algorithm);
+    // 创建一个Modal弹窗让用户确认解压操作
+    Modal.confirm({
+      title: '文件解压',
+      content: (
+        <div>
+          <p>您正在解压文件 {file.originalName}</p>
+          <p>如果文件已加密，请输入密钥（可选）:</p>
+          <input 
+            id="encryption-key-input" 
+            type="text" 
+            placeholder="输入加密密钥（如果有）" 
+            style={{ width: '100%', padding: '8px', marginTop: '10px' }}
+          />
+        </div>
+      ),
+      onOk: async () => {
+        try {
+          // 获取用户输入的密钥
+          const keyInput = document.getElementById('encryption-key-input');
+          let encryptionKey = keyInput ? keyInput.value.trim() : null;
+          
+          // 如果用户没有输入密钥，尝试从localStorage获取
+          if (!encryptionKey) {
+            const encryptionKeys = JSON.parse(localStorage.getItem('encryptionKeys') || '{}');
+            if (file.id in encryptionKeys) {
+              encryptionKey = encryptionKeys[file.id];
+            }
+          }
+          
+          // 创建FormData对象
+          const formData = new FormData();
+          
+          // 获取压缩文件
+          const response = await axiosInstance.get(`/download/${file.compressedName}`, {
+            responseType: 'blob'
+          });
+          
+          // 创建File对象
+          const compressedFile = new File([response.data], file.compressedName, {
+            type: 'application/octet-stream'
+          });
+          
+          // 添加到FormData
+          formData.append('file', compressedFile);
+          formData.append('algorithm', file.algorithm);
+          formData.append('file_id', file.id); // 发送文件ID
+          
+          // 如果有加密密钥，添加到请求中
+          if (encryptionKey) {
+            formData.append('encryption_key', encryptionKey);
+          }
 
-      // 发送解压请求
-      const decompressResponse = await axiosInstance.post('/decompress', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
+          // 发送解压请求
+          const decompressResponse = await axiosInstance.post('/decompress', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            }
+          });
+
+          
+          // 自动下载解压后的文件
+          handleDownload(decompressResponse.data.filename);
+          message.success('文件解压成功');
+        } catch (error) {
+          message.error('文件解压失败: ' + (error.response?.data?.detail || error.message));
         }
-      });
-
-      message.success('文件解压成功');
-      // 自动下载解压后的文件
-      handleDownload(decompressResponse.data.filename);
-    } catch (error) {
-      message.error('文件解压失败: ' + (error.response?.data?.detail || error.message));
-    }
+      },
+      okText: '解压',
+      cancelText: '取消',
+    });
   };
 
   const handleCopyShareLink = async (link) => {
@@ -356,7 +424,8 @@ export const FileCompressor = () => {
         compressedSize: file.compressed_size,
         compressionRatio: file.compression_ratio,
         shareInfo: file.shareInfo,
-        createdAt: file.created_at
+        createdAt: file.created_at,
+        encryption_key: file.encryption_key // 从响应中获取加密密钥信息
       }));
       setFiles(formattedFiles);
     } catch (error) {
@@ -398,6 +467,10 @@ export const FileCompressor = () => {
         isCompressing={isCompressing}
         isStopping={isStopping}
         onStopCompression={handleStopCompression}
+        enableEncryption={enableEncryption}
+        encryptionKey={encryptionKey}
+        onEnableEncryptionChange={handleEnableEncryptionChange}
+        onEncryptionKeyChange={handleEncryptionKeyChange}
       />
 
       <CompressionProgress

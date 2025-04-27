@@ -89,43 +89,57 @@ async def init_test_data():
                 "filename": "test1.txt",
                 "size": 1024,
                 "algorithm": "zip",
-                "owner": created_users["admin"]
+                "owner": created_users["admin"],
+                "encrypted": True,
+                "encryption_key": "XYZ123abc456def789"
             },
             {
                 "filename": "test2.txt",
                 "size": 2048,
                 "algorithm": "lz77",
-                "owner": created_users["admin"]
+                "owner": created_users["admin"],
+                "encrypted": False,
+                "encryption_key": None
             },
             {
                 "filename": "test3.txt",
                 "size": 3072,
                 "algorithm": "combined",
-                "owner": created_users["admin"]
+                "owner": created_users["admin"],
+                "encrypted": True,
+                "encryption_key": "SecureKey123456789"
             },
             {
                 "filename": "test4.txt",
                 "size": 4096,
                 "algorithm": "huffman",
-                "owner": created_users["admin"]
+                "owner": created_users["admin"],
+                "encrypted": False,
+                "encryption_key": None
             },
             {
                 "filename": "test5.txt",
                 "size": 5120,
                 "algorithm": "huffman",
-                "owner": created_users["test"]
+                "owner": created_users["test"],
+                "encrypted": True,
+                "encryption_key": "TestEncryptKey9876"
             },
             {
                 "filename": "test6.txt",
                 "size": 6144,
                 "algorithm": "combined",
-                "owner": created_users["test"]
+                "owner": created_users["test"],
+                "encrypted": False,
+                "encryption_key": None
             },
             {
                 "filename": "test7.txt",
                 "size": 7168,
                 "algorithm": "zip",
-                "owner": created_users["demo"]
+                "owner": created_users["demo"],
+                "encrypted": True,
+                "encryption_key": "DemoSecretKey54321"
             },
         ]
 
@@ -149,13 +163,14 @@ async def init_test_data():
                 compressed_size=compressed_size,
                 compression_ratio=compression_ratio,
                 algorithm=file_data["algorithm"],
-                owner_id=file_data["owner"].id
+                owner_id=file_data["owner"].id,
+                encryption_key=file_data["encryption_key"]
             )
             db.add(file)
             db.commit()
             db.refresh(file)
             created_files.append(file)
-            print(f"创建文件记录: {file.filename}")
+            print(f"创建文件记录: {file.filename}, 加密: {'是' if file_data['encrypted'] else '否'}")
 
         # 创建测试分享记录
         test_shares = [

@@ -19,10 +19,7 @@ export const SharesPage = () => {
     try {
       setLoading(true);
       const response = await axiosInstance.get('/shares');
-      
-      // 调试输出，查看后端返回的数据结构
-      console.log('后端返回的共享数据:', response.data);
-      
+            
       // 格式化共享数据
       const formattedShares = response.data.map(share => ({
         ...share,

@@ -102,9 +102,10 @@ export const FilesPage = () => {
         }
       });
 
-      message.success('文件解压成功');
+      
       // 自动下载解压后的文件
       handleDownload(decompressResponse.data.filename);
+      message.success('文件解压成功');
     } catch (error) {
       message.error('文件解压失败: ' + (error.response?.data?.detail || error.message));
     }
