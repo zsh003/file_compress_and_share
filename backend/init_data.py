@@ -164,6 +164,7 @@ async def init_test_data():
                 compression_ratio=compression_ratio,
                 algorithm=file_data["algorithm"],
                 owner_id=file_data["owner"].id,
+                is_encrypted=file_data["encrypted"],
                 encryption_key=file_data["encryption_key"]
             )
             db.add(file)

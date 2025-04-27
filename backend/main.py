@@ -295,16 +295,21 @@ async def upload_file(
         else:
             raise HTTPException(status_code=400, detail="不支持的压缩算法")
 
-        # 如果不需要加密，设置压缩器不使用加密
-        if not enable_encryption:
-            if hasattr(compressor, 'set_encryption_key'):
+        # 配置压缩器的加密选项
+        if hasattr(compressor, 'set_encryption_key'):
+            # 如果不需要加密，确保禁用加密功能
+            if not enable_encryption:
+                # 设置为None表示不使用加密
                 compressor.set_encryption_key(None)
                 print("禁用加密")
-        # 如果需要加密但没提供密钥，将使用默认生成的密钥
-        elif enable_encryption and encryption_key:
-            if hasattr(compressor, 'set_encryption_key'):
+            # 如果需要加密且提供了密钥，使用用户提供的密钥
+            elif enable_encryption and encryption_key:
                 compressor.set_encryption_key(encryption_key)
                 print(f"使用用户提供的加密密钥")
+            # 如果需要加密但没提供密钥，使用默认生成的密钥
+            elif enable_encryption:
+                # 不需要特殊操作，压缩器默认会生成密钥
+                print(f"使用自动生成的加密密钥")
 
         # 设置进度回调
         if hasattr(compressor, 'set_progress_callback'):
@@ -322,14 +327,18 @@ async def upload_file(
 
         compressed_path = os.path.join(COMPRESSED_DIR, f"{file.filename}.compressed")
 
-        # 在后台任务中执行压缩
-        compression_task = asyncio.create_task(compress_file(compressor, file_path, compressed_path, task_id))
+        # 保存加密设置供compress_file使用
         compression_tasks[task_id] = {
-            "task": compression_task,
+            "task": None,  # 将在下面设置
             "user_id": current_user.id,
             "original_size": file_size,
-            "algorithm": algorithm
+            "algorithm": algorithm,
+            "enable_encryption": enable_encryption  # 添加加密标志
         }
+
+        # 在后台任务中执行压缩
+        compression_task = asyncio.create_task(compress_file(compressor, file_path, compressed_path, task_id))
+        compression_tasks[task_id]["task"] = compression_task
 
         return {
             "message": "文件上传成功，开始压缩",
@@ -387,6 +396,7 @@ async def compress_file(compressor, input_path, output_path, task_id):
         user_id = task_info["user_id"]
         original_size = task_info["original_size"]
         algorithm = task_info["algorithm"]
+        enable_encryption = task_info["enable_encryption"]
 
         # 异步压缩
         if asyncio.iscoroutinefunction(compressor.compress):
@@ -402,7 +412,7 @@ async def compress_file(compressor, input_path, output_path, task_id):
 
         # 获取加密密钥（如果有）
         encryption_key = None
-        if hasattr(compressor, 'get_encryption_key'):
+        if enable_encryption and hasattr(compressor, 'get_encryption_key'):
             encryption_key = compressor.get_encryption_key()
 
         # 保存文件信息到数据库
@@ -415,7 +425,8 @@ async def compress_file(compressor, input_path, output_path, task_id):
                 compression_ratio=compression_ratio,
                 algorithm=algorithm,
                 owner_id=user_id,
-                encryption_key=encryption_key  # 保存加密密钥到数据库
+                is_encrypted=enable_encryption,  # 保存加密状态
+                encryption_key=encryption_key  # 只有在加密时才有值
             )
             db.add(file_record)
             db.commit()
@@ -429,7 +440,8 @@ async def compress_file(compressor, input_path, output_path, task_id):
                     "original_size": original_size,
                     "current_size": compressed_size,
                     "compression_ratio": compression_ratio,
-                    "file_id": file_record.id
+                    "file_id": file_record.id,
+                    "is_encrypted": enable_encryption  # 添加加密状态到消息中
                 }
             }
             
@@ -488,13 +500,18 @@ async def decompress_file(
         task_id = str(uuid.uuid4())
         stop_flags[task_id] = False
 
-        # 如果提供了文件ID，尝试从数据库获取加密密钥
+        # 从数据库获取文件信息
+        is_encrypted = False
         if file_id is not None:
             db_file = db.query(models.File).filter(models.File.id == file_id).first()
-            if db_file and db_file.encryption_key:
-                # 优先使用数据库中的密钥
-                encryption_key = db_file.encryption_key
-                print(f"使用数据库中的加密密钥: {encryption_key[:5]}...{encryption_key[-5:] if len(encryption_key) > 10 else encryption_key}")
+            if db_file:
+                is_encrypted = db_file.is_encrypted  # 获取是否加密
+                # 如果文件加密且没有提供密钥，尝试使用数据库中的密钥
+                if is_encrypted and not encryption_key and db_file.encryption_key:
+                    encryption_key = db_file.encryption_key
+                    print(f"使用数据库中的加密密钥: {encryption_key[:5]}...{encryption_key[-5:] if len(encryption_key) > 10 else encryption_key}")
+                elif not is_encrypted:
+                    print("文件未加密，不需要密钥")
 
         # 保存上传的压缩文件
         if file.filename is not None:
@@ -530,11 +547,9 @@ async def decompress_file(
         # 确保解压目录存在
         os.makedirs(DECOMPRESSED_DIR, exist_ok=True)
 
-        print(encryption_key)
-
-        # 在后台任务中执行解压
+        # 在后台任务中执行解压，传递是否加密的信息
         decompression_task = asyncio.create_task(
-            decompress_file_task(compressor, file_path, decompressed_path, task_id, encryption_key)
+            decompress_file_task(compressor, file_path, decompressed_path, task_id, encryption_key, is_encrypted)
         )
         compression_tasks[task_id] = {
             "task": decompression_task,
@@ -550,13 +565,19 @@ async def decompress_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def decompress_file_task(compressor, input_path, output_path, task_id, encryption_key=None):
+async def decompress_file_task(compressor, input_path, output_path, task_id, encryption_key=None, is_encrypted=False):
     try:
-        # 添加日志记录密钥信息
-        if encryption_key:
-            print(f"尝试使用密钥解密: {encryption_key[:5]}...{encryption_key[-5:] if len(encryption_key) > 10 else encryption_key}")
+        # 根据is_encrypted决定是否需要解密
+        if is_encrypted:
+            if encryption_key:
+                print(f"文件已加密，使用密钥解密: {encryption_key[:5]}...{encryption_key[-5:] if len(encryption_key) > 10 else encryption_key}")
+            else:
+                print("警告：文件已加密，但未提供密钥，解压可能会失败")
+                # 文件加密但没有密钥，可能会失败
         else:
-            print("未提供解密密钥，尝试无密钥解压")
+            # 文件未加密，确保不使用密钥
+            print("文件未加密，不需要密钥")
+            encryption_key = None
             
         # 异步解压
         if asyncio.iscoroutinefunction(compressor.decompress):
@@ -570,13 +591,15 @@ async def decompress_file_task(compressor, input_path, output_path, task_id, enc
             )
 
         # 发送完成消息
-        await send_compression_progress(active_connections[task_id], {
-            "type": "completed",
-            "progress": 100,
-            "details": {
-                "filename": os.path.basename(output_path)
-            }
-        })
+        for client_id, ws in list(active_connections.items()):
+            if client_id.startswith(task_id):
+                await send_compression_progress(ws, {
+                    "type": "completed",
+                    "progress": 100,
+                    "details": {
+                        "filename": os.path.basename(output_path)
+                    }
+                })
 
     except asyncio.CancelledError:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 解压任务被取消: {task_id}")
@@ -591,14 +614,15 @@ async def decompress_file_task(compressor, input_path, output_path, task_id, enc
     except Exception as e:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 解压错误: {str(e)}")
         # 通知客户端解压失败
-        for ws in active_connections.values():
-            try:
-                await send_compression_progress(ws, {
-                    'type': 'error',
-                    'message': str(e)
-                })
-            except Exception as ws_error:
-                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 发送错误通知失败: {str(ws_error)}")
+        for client_id, ws in list(active_connections.items()):
+            if client_id.startswith(task_id):
+                try:
+                    await send_compression_progress(ws, {
+                        'type': 'error',
+                        'message': f"解压失败: {str(e)}"
+                    })
+                except Exception as ws_error:
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 发送错误通知失败: {str(ws_error)}")
     finally:
         # 清理任务相关资源
         if task_id in compression_tasks:

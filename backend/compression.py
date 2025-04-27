@@ -139,42 +139,27 @@ class BaseCompressor:
         """
         解密文件并将其保存到输出路径
         """
-        # 检查文件的前16字节是否为IV，这是加密文件的特征
+        # 读取文件内容
         with open(input_path, 'rb') as f:
-            header = f.read(16)
-            f.seek(0)  # 重置文件指针
-            encrypted_data = f.read()
-            
-        # 检查是否需要解密
-        is_encrypted = True
-        try:
-            # 尝试解析IV，如果失败则可能不是加密文件
-            iv = header
-            # 简单检查，判断IV是否有效
-            if all(b == 0 for b in iv) or all(b == 255 for b in iv):
-                is_encrypted = False
-                print("文件可能未加密，尝试直接处理")
-        except Exception:
-            is_encrypted = False
-            print("无法解析IV，假设文件未加密")
-            
-        if not is_encrypted:
-            # 直接复制文件
+            file_data = f.read()
+        
+        # 如果没有提供密钥，认为文件没有加密，直接复制
+        if key_base64 is None:
+            print("未提供密钥，跳过解密步骤")
             with open(output_path, 'wb') as f:
-                f.write(encrypted_data)
+                f.write(file_data)
             return True
-            
-        # 文件确认需要解密但未提供密钥
-        if is_encrypted and not key_base64:
-            print("文件需要解密但未提供密钥")
+        
+        # 设置解密密钥
+        try:
+            self.set_encryption_key(key_base64)
+        except Exception as e:
+            print(f"设置解密密钥出错: {str(e)}")
             return False
             
-        # 设置解密密钥
-        if key_base64:
-            self.set_encryption_key(key_base64)
-            
         try:
-            decrypted_data = self.cipher.decrypt(encrypted_data)
+            # 尝试解密
+            decrypted_data = self.cipher.decrypt(file_data)
             
             with open(output_path, 'wb') as f:
                 f.write(decrypted_data)
