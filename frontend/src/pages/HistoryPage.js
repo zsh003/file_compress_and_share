@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Typography, Table, Tag, Spin } from 'antd';
 import axiosInstance from '../utils/axios';
+import { formatFileSize } from '../utils/fileUtils';
+import moment from 'moment';
 
 const { Title } = Typography;
 
@@ -16,7 +18,16 @@ export const HistoryPage = () => {
     try {
       setLoading(true);
       const response = await axiosInstance.get('/compression-history');
-      setHistory(response.data);
+      
+      // 格式化历史记录数据
+      const formattedHistory = response.data.map(record => ({
+        ...record,
+        file_name: record.filename,
+        status: 'completed', // 后端目前只返回完成的记录
+        completed_at: moment(record.created_at).format('YYYY-MM-DD HH:mm:ss')
+      }));
+      
+      setHistory(formattedHistory);
       setLoading(false);
     } catch (error) {
       console.error('获取历史记录失败:', error);
@@ -53,25 +64,19 @@ export const HistoryPage = () => {
       title: '原始大小',
       dataIndex: 'original_size',
       key: 'original_size',
-      render: (size) => `${(size / 1024 / 1024).toFixed(2)} MB`,
+      render: (size) => formatFileSize(size),
     },
     {
       title: '压缩后大小',
       dataIndex: 'compressed_size',
       key: 'compressed_size',
-      render: (size) => `${(size / 1024 / 1024).toFixed(2)} MB`,
+      render: (size) => formatFileSize(size),
     },
     {
       title: '压缩率',
       dataIndex: 'compression_ratio',
       key: 'compression_ratio',
-      render: (_, record) => {
-        if (record.original_size && record.compressed_size) {
-          const ratio = (1 - record.compressed_size / record.original_size) * 100;
-          return `${ratio.toFixed(2)}%`;
-        }
-        return '-';
-      },
+      render: (ratio) => `${ratio.toFixed(2)}%`,
     },
     {
       title: '状态',

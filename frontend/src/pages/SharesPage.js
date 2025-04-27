@@ -3,6 +3,7 @@ import { Typography, Table, Button, message, Space, Modal, Input } from 'antd';
 import { ShareAltOutlined, CopyOutlined, DeleteOutlined } from '@ant-design/icons';
 import axiosInstance from '../utils/axios';
 import { copyToClipboard } from '../utils/fileUtils';
+import moment from 'moment';
 
 const { Title } = Typography;
 
@@ -18,7 +19,16 @@ export const SharesPage = () => {
     try {
       setLoading(true);
       const response = await axiosInstance.get('/shares');
-      setShares(response.data);
+      
+      // 格式化共享数据
+      const formattedShares = response.data.map(share => ({
+        ...share,
+        link: share.share_url,
+        created_at: moment(share.created_at).format('YYYY-MM-DD HH:mm:ss'),
+        expires_at: moment(share.expires_at).format('YYYY-MM-DD HH:mm:ss')
+      }));
+      
+      setShares(formattedShares);
       setLoading(false);
     } catch (error) {
       console.error('获取共享列表失败:', error);
@@ -30,6 +40,19 @@ export const SharesPage = () => {
     const success = await copyToClipboard(link);
     if (success) {
       message.success('链接已复制到剪贴板');
+    } else {
+      message.error('复制失败');
+    }
+  };
+
+  const handleCopyLinkWithPassword = async (link, password) => {
+    // 如果链接中已经有查询参数，使用&添加密码参数，否则使用?
+    const separator = link.includes('?') ? '&' : '?';
+    const fullLink = `${link}${separator}password=${password}`;
+    
+    const success = await copyToClipboard(fullLink);
+    if (success) {
+      message.success('带密码的链接已复制到剪贴板');
     } else {
       message.error('复制失败');
     }
@@ -73,6 +96,18 @@ export const SharesPage = () => {
       key: 'created_at',
     },
     {
+      title: '过期时间',
+      dataIndex: 'expires_at',
+      key: 'expires_at',
+    },
+    {
+      title: '下载次数',
+      key: 'downloads',
+      render: (_, record) => (
+        <span>{record.current_downloads}/{record.max_downloads === -1 ? '不限' : record.max_downloads}</span>
+      ),
+    },
+    {
       title: '操作',
       key: 'action',
       render: (_, record) => (
@@ -83,6 +118,14 @@ export const SharesPage = () => {
           >
             复制链接
           </Button>
+          {record.is_password_protected && record.password && (
+            <Button 
+              icon={<CopyOutlined />} 
+              onClick={() => handleCopyLinkWithPassword(record.link, record.password)}
+            >
+              复制带密码链接
+            </Button>
+          )}
           <Button 
             danger 
             icon={<DeleteOutlined />} 

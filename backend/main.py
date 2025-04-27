@@ -776,3 +776,6 @@ async def get_compression_history(
 ):
     history = crud.get_user_compression_history(db, current_user.id, skip=skip, limit=limit)
     return history
+
+if __name__ == '__main__':
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
