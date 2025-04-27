@@ -640,6 +640,7 @@ async def share_file(
             "id": db_share.id,
             "share_id": share_id,
             "file_id": file_id,
+            "file_name": db_file.filename,
             "password": password,
             "share_url": share_url,
             "created_at": db_share.created_at,

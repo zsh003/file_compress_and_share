@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Table, Button, message, Space, Modal, Input } from 'antd';
-import { ShareAltOutlined, CopyOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Typography, Table, Button, message, Space, Modal, Input, Dropdown, Menu } from 'antd';
+import { ShareAltOutlined, CopyOutlined, DeleteOutlined, MoreOutlined } from '@ant-design/icons';
 import axiosInstance from '../utils/axios';
 import { copyToClipboard } from '../utils/fileUtils';
 import moment from 'moment';
@@ -19,6 +19,9 @@ export const SharesPage = () => {
     try {
       setLoading(true);
       const response = await axiosInstance.get('/shares');
+      
+      // 调试输出，查看后端返回的数据结构
+      console.log('后端返回的共享数据:', response.data);
       
       // 格式化共享数据
       const formattedShares = response.data.map(share => ({
@@ -73,12 +76,15 @@ export const SharesPage = () => {
       title: '文件名',
       dataIndex: 'file_name',
       key: 'file_name',
+      width: '15%',
+      render: (text) => text || '未知文件',
     },
     {
       title: '共享链接',
       dataIndex: 'link',
       key: 'link',
       ellipsis: true,
+      width: '25%',
       render: (text) => (
         <a href={text} target="_blank" rel="noopener noreferrer">
           {text}
@@ -89,20 +95,24 @@ export const SharesPage = () => {
       title: '访问密码',
       dataIndex: 'password',
       key: 'password',
+      width: '10%',
     },
     {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
+      width: '15%',
     },
     {
       title: '过期时间',
       dataIndex: 'expires_at',
       key: 'expires_at',
+      width: '15%',
     },
     {
       title: '下载次数',
       key: 'downloads',
+      width: '10%',
       render: (_, record) => (
         <span>{record.current_downloads}/{record.max_downloads === -1 ? '不限' : record.max_downloads}</span>
       ),
@@ -110,37 +120,36 @@ export const SharesPage = () => {
     {
       title: '操作',
       key: 'action',
-      render: (_, record) => (
-        <Space size="middle">
-          <Button 
-            icon={<CopyOutlined />} 
-            onClick={() => handleCopyLink(record.link)}
-          >
-            复制链接
-          </Button>
-          {record.is_password_protected && record.password && (
-            <Button 
-              icon={<CopyOutlined />} 
-              onClick={() => handleCopyLinkWithPassword(record.link, record.password)}
-            >
-              复制带密码链接
-            </Button>
-          )}
-          <Button 
-            danger 
-            icon={<DeleteOutlined />} 
-            onClick={() => {
+      width: '10%',
+      render: (_, record) => {
+        const menu = (
+          <Menu>
+            <Menu.Item key="copy" onClick={() => handleCopyLink(record.link)}>
+              <CopyOutlined /> 复制链接
+            </Menu.Item>
+            {record.is_password_protected && record.password && (
+              <Menu.Item key="copyWithPassword" onClick={() => handleCopyLinkWithPassword(record.link, record.password)}>
+                <CopyOutlined /> 复制带密码链接
+              </Menu.Item>
+            )}
+            <Menu.Item key="delete" danger onClick={() => {
               Modal.confirm({
                 title: '确认删除共享',
                 content: '确定要删除这个共享吗？此操作无法撤销。',
                 onOk: () => handleDeleteShare(record.id),
               });
-            }}
-          >
-            删除
-          </Button>
-        </Space>
-      ),
+            }}>
+              <DeleteOutlined /> 删除
+            </Menu.Item>
+          </Menu>
+        );
+
+        return (
+          <Dropdown overlay={menu} trigger={['click']}>
+            <Button icon={<MoreOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 
@@ -153,6 +162,7 @@ export const SharesPage = () => {
         rowKey="id" 
         loading={loading}
         pagination={{ pageSize: 10 }}
+        scroll={{ x: 1100 }}
       />
     </div>
   );

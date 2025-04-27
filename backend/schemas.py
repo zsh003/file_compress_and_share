@@ -58,6 +58,7 @@ class FileShare(FileShareBase):
     created_at: datetime
     expires_at: datetime
     current_downloads: int
+    file_name: Optional[str] = None
 
     class Config:
         from_attributes = True
