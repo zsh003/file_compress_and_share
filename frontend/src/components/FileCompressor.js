@@ -259,36 +259,38 @@ export const FileCompressor = () => {
     setShowShareModal(false);
   };
 
-  const handleDecompress = async (file) => {
+  const handleFileDecompress = async (file) => {
     try {
+      message.loading('正在解压文件...', 0);
+      
       // 创建FormData对象
       const formData = new FormData();
-      // 获取压缩文件
-      const response = await axiosInstance.get(`/download/${file.compressedName}`, {
-        responseType: 'blob'
-      });
-      
-      // 创建File对象
-      const compressedFile = new File([response.data], file.compressedName, {
-        type: 'application/octet-stream'
-      });
-      
-      // 添加到FormData
-      formData.append('file', compressedFile);
-      formData.append('algorithm', file.algorithm);
+      formData.append('file', file);
+      formData.append('algorithm', algorithm);
 
       // 发送解压请求
-      const decompressResponse = await axiosInstance.post('/decompress', formData, {
+      const response = await axiosInstance.post('/decompress', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
       });
 
+      message.destroy(); // 销毁加载消息
       message.success('文件解压成功');
+      
       // 自动下载解压后的文件
-      handleDownload(decompressResponse.data.filename);
+      if (response.data && response.data.filename) {
+        await handleDownload(response.data.filename);
+      } else {
+        message.warning('无法自动下载解压后的文件');
+      }
+      
+      return false; // 阻止默认上传行为
     } catch (error) {
+      message.destroy(); // 销毁加载消息
+      console.error('文件解压失败:', error);
       message.error('文件解压失败: ' + (error.response?.data?.detail || error.message));
+      return false;
     }
   };
 
@@ -395,6 +397,7 @@ export const FileCompressor = () => {
         algorithm={algorithm}
         onAlgorithmChange={handleAlgorithmChange}
         onFileUpload={handleFileUpload}
+        onFileDecompress={handleFileDecompress}
         isCompressing={isCompressing}
         isStopping={isStopping}
         onStopCompression={handleStopCompression}
@@ -416,7 +419,7 @@ export const FileCompressor = () => {
         files={files}
         onDownload={handleDownload}
         onShare={handleShare}
-        onDecompress={handleDecompress}
+        onDecompress={handleFileDecompress}
         onCopyShareLink={handleCopyShareLink}
         onCopyPassword={handleCopyPassword}
       />

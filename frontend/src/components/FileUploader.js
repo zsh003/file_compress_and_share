@@ -1,6 +1,6 @@
 import React from 'react';
 import { Upload, Button, Radio, Space, Typography } from 'antd';
-import { UploadOutlined } from '@ant-design/icons';
+import { UploadOutlined, DownloadOutlined } from '@ant-design/icons';
 import { ALGORITHMS, getAlgorithmDisplayName, getAlgorithmDescription } from '../constants/algorithms';
 
 const { Title } = Typography;
@@ -9,6 +9,7 @@ export const FileUploader = ({
   algorithm, 
   onAlgorithmChange, 
   onFileUpload,
+  onFileDecompress,
   isCompressing,
   isStopping,
   onStopCompression
@@ -16,7 +17,7 @@ export const FileUploader = ({
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{ marginBottom: 32 }}>
-        <Title level={4} style={{ marginBottom: 16 }}>选择压缩算法：</Title>
+        <Title level={4} style={{ marginBottom: 16 }}>选择算法：</Title>
         <Radio.Group 
           value={algorithm} 
           onChange={e => onAlgorithmChange(e.target.value)} 
@@ -33,8 +34,8 @@ export const FileUploader = ({
       </div>
 
       <div>
-        <Title level={4}>上传文件：</Title>
-        <Space>
+        <Title level={4}>文件操作：</Title>
+        <Space size="large">
           <Upload
             beforeUpload={onFileUpload}
             showUploadList={false}
@@ -44,10 +45,26 @@ export const FileUploader = ({
               icon={<UploadOutlined />} 
               size="large"
               disabled={isCompressing}
+              type="primary"
             >
-              选择文件
+              上传文件压缩
             </Button>
           </Upload>
+
+          <Upload
+            beforeUpload={onFileDecompress}
+            showUploadList={false}
+            maxCount={1}
+          >
+            <Button 
+              icon={<DownloadOutlined />} 
+              size="large"
+              disabled={isCompressing}
+            >
+              解压文件
+            </Button>
+          </Upload>
+
           {isCompressing && (
             <Button
               danger
