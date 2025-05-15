@@ -207,6 +207,31 @@ async def register(user: schemas.UserCreate, db: Session = Depends(database.get_
     # 创建新用户
     return crud.create_user(db=db, username=user.username, password=user.password)
 
+# 处理前端RegisterForm提交的表单数据
+@app.post("/user/create_user")
+async def create_user(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(database.get_db)
+):
+    # 检查用户名是否已存在
+    db_user = crud.get_user_by_username(db, username=username)
+    if db_user:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"code": 1, "msg": "用户名已存在"}
+        )
+    
+    try:
+        # 创建新用户
+        crud.create_user(db=db, username=username, password=password)
+        return {"code": 0, "msg": "注册成功"}
+    except Exception as e:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"code": 1, "msg": f"注册失败: {str(e)}"}
+        )
+
 @app.get("/user/me", response_model=schemas.User)
 async def get_current_user_info(
     current_user: models.User = Depends(auth.get_current_user)
