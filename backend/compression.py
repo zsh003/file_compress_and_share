@@ -11,12 +11,29 @@ import shutil
 import asyncio
 import subprocess
 from typing import Callable
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+
+
+class AESCrypto:
+    def __init__(self, key=b'ThisIsA16ByteKey', iv=b'ThisIsA16ByteIV.'):
+        self.key = key
+        self.iv = iv
+        
+    def encrypt(self, data):
+        cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
+        return cipher.encrypt(pad(data, AES.block_size))
+        
+    def decrypt(self, data):
+        cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
+        return unpad(cipher.decrypt(data), AES.block_size)
 
 
 class BaseCompressor:
     def __init__(self):
         self._progress_callback = None
         self._start_time = None
+        self.crypto = AESCrypto()
 
     def set_progress_callback(self, callback: Callable):
         self._progress_callback = callback
@@ -62,6 +79,10 @@ class LZ77Compressor(BaseCompressor):
 
         with open(input_path, 'rb') as file:
             data = file.read()
+            
+        # 加密数据
+        encrypted_data = self.crypto.encrypt(data)
+        data = encrypted_data
 
         compressed_data = []
         current_pos = 0
@@ -157,6 +178,10 @@ class LZ77Compressor(BaseCompressor):
                 for j in range(length):
                     decompressed_data.append(decompressed_data[start + j])
                 i += 4
+        
+        # 解密数据
+        decrypted_data = self.crypto.decrypt(bytes(decompressed_data))
+        decompressed_data = decrypted_data
 
         with open(output_path, 'wb') as file:
             file.write(decompressed_data)
@@ -200,6 +225,10 @@ class HuffmanCompressor(BaseCompressor):
 
         with open(input_path, 'rb') as file:
             text = file.read()
+            
+        # 加密数据
+        encrypted_text = self.crypto.encrypt(text)
+        text = encrypted_text
 
         # 第一阶段：构建Huffman树（10%进度）
         self.make_frequency_dict(text)
@@ -294,12 +323,12 @@ class HuffmanCompressor(BaseCompressor):
                     decompressed_data.append(self.reverse_mapping[current_code])
                     current_code = ""
 
+            # 解密数据
+            decrypted_data = self.crypto.decrypt(bytes(decompressed_data))
+            
             # 保存解压后的数据
             with open(output_path, 'wb') as file:
-                file.write(bytes(decompressed_data))
-
-
-
+                file.write(decrypted_data)
 
 
 class ZipCompressor(BaseCompressor):
@@ -312,16 +341,14 @@ class ZipCompressor(BaseCompressor):
                 # 获取输入文件的基本名称
                 base_name = os.path.basename(input_path)
                 
-                # 写入文件并报告进度
-                bytes_written = 0
-                chunk_size = 8192  # 8KB chunks
-                
+                # 读取数据并加密
                 with open(input_path, 'rb') as f:
                     data = f.read()
+                    encrypted_data = self.crypto.encrypt(data)
                     total_size = len(data)
                     
-                    # 将数据写入zip文件
-                    zf.writestr(base_name, data)
+                    # 将加密数据写入zip文件
+                    zf.writestr(base_name, encrypted_data)
                     
                     # 模拟进度更新
                     for i in range(0, 101, 2):  # 每2%更新一次
@@ -337,8 +364,26 @@ class ZipCompressor(BaseCompressor):
             raise
 
     async def decompress(self, input_path: str, output_path: str):
-        with zipfile.ZipFile(input_path, 'r') as zf:
-            zf.extractall(path=os.path.dirname(output_path))
+        # 临时提取文件
+        temp_dir = tempfile.mkdtemp()
+        try:
+            with zipfile.ZipFile(input_path, 'r') as zf:
+                zf.extractall(path=temp_dir)
+                
+                # 解密解压后的文件
+                extracted_file = os.path.join(temp_dir, os.path.basename(output_path))
+                with open(extracted_file, 'rb') as f:
+                    encrypted_data = f.read()
+                    
+                # 解密数据
+                decrypted_data = self.crypto.decrypt(encrypted_data)
+                
+                # 写入解密后的数据
+                with open(output_path, 'wb') as f:
+                    f.write(decrypted_data)
+        finally:
+            # 清理临时目录
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 class CombinedCompressor:
     def __init__(self):
